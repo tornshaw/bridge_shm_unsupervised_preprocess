@@ -33,7 +33,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -192,6 +192,53 @@ def style_time_axis(ax: plt.Axes, time_axis: pd.Series) -> None:
         ax.xaxis.set_major_formatter(formatter)
 
 
+def infer_sampling_minutes(time_axis: pd.Series, fallback: int = 10) -> int:
+    """估计采样周期（分钟），用于补齐掉线造成的时间缺口。"""
+    if not pd.api.types.is_datetime64_any_dtype(time_axis):
+        return fallback
+    deltas = time_axis.sort_values().diff().dropna().dt.total_seconds() / 60.0
+    deltas = deltas[(deltas > 0) & np.isfinite(deltas)]
+    if deltas.empty:
+        return fallback
+    return int(max(1, round(float(deltas.median()))))
+
+
+def align_to_regular_timeline(df: pd.DataFrame, sampling_minutes: Optional[int] = None) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    将数据重采样到规则时间轴并显式插入缺失行。
+    返回：(对齐后的 DataFrame, 插入行掩码)。
+    """
+    time_axis, has_datetime = infer_time_column(df)
+    if not has_datetime:
+        return df.copy(), pd.Series(False, index=np.arange(len(df)))
+
+    work = df.copy()
+    work.iloc[:, 0] = pd.to_datetime(work.iloc[:, 0], errors="coerce")
+    work = work.dropna(subset=[work.columns[0]]).drop_duplicates(subset=[work.columns[0]], keep="last")
+    work = work.sort_values(work.columns[0]).reset_index(drop=True)
+
+    freq_min = sampling_minutes or infer_sampling_minutes(work.iloc[:, 0])
+    full_time = pd.date_range(work.iloc[0, 0], work.iloc[-1, 0], freq=f"{freq_min}min")
+    aligned = work.set_index(work.columns[0]).reindex(full_time).reset_index()
+    aligned = aligned.rename(columns={"index": work.columns[0]})
+    inserted_mask = aligned.drop(columns=[work.columns[0]]).isna().all(axis=1)
+    return aligned, inserted_mask
+
+
+def build_known_event_mask(time_axis: pd.Series) -> pd.Series:
+    """
+    构造已知运维事件窗口掩码：
+    - 2026-01-25~2026-02-05：物联网卡掉线窗口
+    - 2026-02-20~2026-03-10：数据库扩容/迁移窗口
+    """
+    if not pd.api.types.is_datetime64_any_dtype(time_axis):
+        return pd.Series(False, index=np.arange(len(time_axis)))
+    t = pd.to_datetime(time_axis, errors="coerce")
+    iot_gap = (t >= pd.Timestamp("2026-01-25")) & (t <= pd.Timestamp("2026-02-05 23:59:59"))
+    db_gap = (t >= pd.Timestamp("2026-02-20")) & (t <= pd.Timestamp("2026-03-10 23:59:59"))
+    return (iot_gap | db_gap).fillna(False)
+
+
 # -----------------------------
 # 模型
 # -----------------------------
@@ -232,6 +279,7 @@ class FitArtifacts:
     sensor_names: List[str]
     threshold: float
     training_loss_history: List[float]
+    sampling_minutes: int = 10
 
 
 # -----------------------------
@@ -329,7 +377,8 @@ class BridgeSHMUnsupervisedPreprocessor:
         return recon_windows_t.cpu().numpy(), latent_t.cpu().numpy()
 
     def fit(self, df: pd.DataFrame, positions: Optional[pd.DataFrame] = None) -> "BridgeSHMUnsupervisedPreprocessor":
-        sensor_df = get_sensor_frame(df)
+        aligned_df, _ = align_to_regular_timeline(df)
+        sensor_df = get_sensor_frame(aligned_df)
         sensor_names = list(sensor_df.columns)
         x_raw = sensor_df.to_numpy(dtype=float)
 
@@ -385,8 +434,8 @@ class BridgeSHMUnsupervisedPreprocessor:
         dists, _ = nbrs.kneighbors(latent_windows)
         latent_window_score = dists[:, -1]
 
-        dummy_score = np.zeros(len(df), dtype=float)
-        counts = np.zeros(len(df), dtype=float)
+        dummy_score = np.zeros(len(aligned_df), dtype=float)
+        counts = np.zeros(len(aligned_df), dtype=float)
         for idx, (s, e) in enumerate(spans):
             dummy_score[s:e] += latent_window_score[idx]
             counts[s:e] += 1
@@ -404,6 +453,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             sensor_names=sensor_names,
             threshold=threshold,
             training_loss_history=loss_history,
+            sampling_minutes=infer_sampling_minutes(pd.to_datetime(aligned_df.iloc[:, 0], errors="coerce")),
         )
         return self
 
@@ -411,10 +461,17 @@ class BridgeSHMUnsupervisedPreprocessor:
         if self.model is None or self.artifacts is None:
             raise RuntimeError("请先调用 fit()")
 
-        sensor_df = df[self.artifacts.sensor_names].copy()
-        timestamps, _ = infer_time_column(df)
+        aligned_df, inserted_gap_rows = align_to_regular_timeline(df, sampling_minutes=self.artifacts.sampling_minutes)
+        sensor_df = aligned_df[self.artifacts.sensor_names].copy()
+        timestamps, _ = infer_time_column(aligned_df)
         if len(timestamps) != len(sensor_df):
             timestamps = pd.Series(np.arange(len(sensor_df)))
+        known_event_mask = build_known_event_mask(timestamps)
+        startup_mask = (
+            pd.to_datetime(timestamps, errors="coerce") <= pd.Timestamp("2026-01-10 23:59:59")
+            if pd.api.types.is_datetime64_any_dtype(timestamps)
+            else pd.Series(False, index=np.arange(len(timestamps)))
+        )
 
         x_raw = sensor_df.to_numpy(dtype=float)
         raw_missing = np.isnan(x_raw)
@@ -481,11 +538,15 @@ class BridgeSHMUnsupervisedPreprocessor:
 
         labels = np.full(x_scaled.shape, "normal", dtype=object)
         labels[raw_missing] = "missing"
+        system_gap_mask = np.repeat(inserted_gap_rows.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
+        labels[system_gap_mask] = "system_gap"
 
         first_diff = np.abs(np.diff(x_scaled, axis=0, prepend=x_scaled[[0], :]))
         diff_thr = np.nanpercentile(first_diff, 95)
         spike_mask = (total_score > tau) & (first_diff > diff_thr)
+        startup_jump_mask = np.repeat(startup_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1) & spike_mask
         labels[spike_mask & (~raw_missing)] = "spike"
+        labels[startup_jump_mask & (~raw_missing)] = "startup_jump"
 
         drift_labels = np.zeros_like(x_scaled, dtype=bool)
         run = max(5, self.window_size)
@@ -513,6 +574,9 @@ class BridgeSHMUnsupervisedPreprocessor:
 
         labels[(total_score > tau) & (labels == "normal")] = "graph_inconsistent"
 
+        event_mask_2d = np.repeat(known_event_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
+        labels[event_mask_2d & system_gap_mask] = "known_event_gap"
+
         time_interp = pd.DataFrame(x_scaled).interpolate(limit_direction="both").bfill().ffill().to_numpy()
         graph_est = graph_ref
         rec_est = recon_scaled
@@ -528,7 +592,10 @@ class BridgeSHMUnsupervisedPreprocessor:
         fused_scaled = (w1 * rec_est + w2 * time_interp + w3 * graph_est) / wsum
 
         cleaned_scaled = x_scaled.copy()
-        replace_mask = np.isin(labels, ["missing", "spike", "drift", "stuck", "graph_inconsistent"])
+        replace_mask = np.isin(
+            labels,
+            ["missing", "spike", "drift", "stuck", "graph_inconsistent", "known_event_gap", "system_gap"],
+        )
         cleaned_scaled[replace_mask] = fused_scaled[replace_mask]
         cleaned = inverse_scale(cleaned_scaled, self.artifacts.median, self.artifacts.iqr)
 
@@ -562,6 +629,9 @@ class BridgeSHMUnsupervisedPreprocessor:
                     "drift_count": int((label_df[col] == "drift").sum()),
                     "stuck_count": int((label_df[col] == "stuck").sum()),
                     "graph_inconsistent_count": int((label_df[col] == "graph_inconsistent").sum()),
+                    "startup_jump_count": int((label_df[col] == "startup_jump").sum()),
+                    "system_gap_count": int((label_df[col] == "system_gap").sum()),
+                    "known_event_gap_count": int((label_df[col] == "known_event_gap").sum()),
                 }
             )
 
