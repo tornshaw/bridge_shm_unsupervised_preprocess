@@ -31,8 +31,10 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import math
 import os
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -49,6 +51,13 @@ from sklearn.neighbors import NearestNeighbors
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+
+KNOWN_IOT_START = dt.datetime(2026, 1, 25)
+KNOWN_IOT_END = dt.datetime(2026, 2, 5, 23, 59, 59)
+KNOWN_DB_START = dt.datetime(2026, 2, 20)
+KNOWN_DB_END = dt.datetime(2026, 3, 10, 23, 59, 59)
+STARTUP_START = dt.datetime(2025, 12, 1)
+STARTUP_END = dt.datetime(2026, 1, 10, 23, 59, 59)
 
 
 # -----------------------------
@@ -237,6 +246,45 @@ def build_known_event_mask(time_axis: pd.Series) -> pd.Series:
     iot_gap = (t >= pd.Timestamp("2026-01-25")) & (t <= pd.Timestamp("2026-02-05 23:59:59"))
     db_gap = (t >= pd.Timestamp("2026-02-20")) & (t <= pd.Timestamp("2026-03-10 23:59:59"))
     return (iot_gap | db_gap).fillna(False)
+
+
+def build_startup_mask(time_axis: pd.Series) -> pd.Series:
+    if not pd.api.types.is_datetime64_any_dtype(time_axis):
+        return pd.Series(False, index=np.arange(len(time_axis)))
+    t = pd.to_datetime(time_axis, errors="coerce")
+    return ((t >= pd.Timestamp(STARTUP_START)) & (t <= pd.Timestamp(STARTUP_END))).fillna(False)
+
+
+def split_sensor_name(sensor: str) -> Tuple[str, str]:
+    if "_" in sensor:
+        sid, stype = sensor.rsplit("_", 1)
+        return sid, stype
+    return sensor, "unknown"
+
+
+def calc_health_scores(labels: Sequence[str]) -> Tuple[float, float, float, str, Counter]:
+    n = max(1, len(labels))
+    c = Counter(labels)
+    device_weights = {
+        "device_gap": 2.2,
+        "stuck": 2.4,
+        "drift": 1.8,
+        "step_change": 1.8,
+        "spike": 1.3,
+        "noise": 1.0,
+        "cross_sensor_conflict": 1.5,
+        "startup_jump": 0.2,
+    }
+    avail_weights = {"known_system_gap": 1.0, "bridge_wide_gap": 1.2}
+    d_penalty = sum(c.get(k, 0) * w for k, w in device_weights.items())
+    a_penalty = sum(c.get(k, 0) * w for k, w in avail_weights.items())
+    device_health = max(0.0, min(100.0, 100.0 * (1.0 - d_penalty / n)))
+    availability = max(0.0, min(100.0, 100.0 * (1.0 - a_penalty / n)))
+    project_score = 0.7 * device_health + 0.3 * availability
+    dominant_issue = c.most_common(1)[0][0] if c else "normal"
+    if dominant_issue == "normal" and len(c) > 1:
+        dominant_issue = max((k for k in c if k != "normal"), key=lambda x: c[x], default="normal")
+    return device_health, availability, project_score, dominant_issue, c
 
 
 # -----------------------------
@@ -467,11 +515,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         if len(timestamps) != len(sensor_df):
             timestamps = pd.Series(np.arange(len(sensor_df)))
         known_event_mask = build_known_event_mask(timestamps)
-        startup_mask = (
-            pd.to_datetime(timestamps, errors="coerce") <= pd.Timestamp("2026-01-10 23:59:59")
-            if pd.api.types.is_datetime64_any_dtype(timestamps)
-            else pd.Series(False, index=np.arange(len(timestamps)))
-        )
+        startup_mask = build_startup_mask(timestamps)
 
         x_raw = sensor_df.to_numpy(dtype=float)
         raw_missing = np.isnan(x_raw)
@@ -537,16 +581,21 @@ class BridgeSHMUnsupervisedPreprocessor:
         tau = infer_threshold_gmm(total_score.flatten())
 
         labels = np.full(x_scaled.shape, "normal", dtype=object)
-        labels[raw_missing] = "missing"
         system_gap_mask = np.repeat(inserted_gap_rows.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
-        labels[system_gap_mask] = "system_gap"
+        bridge_wide_missing = np.repeat((raw_missing.mean(axis=1) >= 0.8).reshape(-1, 1), x_scaled.shape[1], axis=1)
+        known_event_2d = np.repeat(known_event_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
+        labels[raw_missing & (~bridge_wide_missing)] = "device_gap"
+        labels[(raw_missing & bridge_wide_missing) | system_gap_mask] = "bridge_wide_gap"
+        labels[known_event_2d & (labels == "bridge_wide_gap")] = "known_system_gap"
 
         first_diff = np.abs(np.diff(x_scaled, axis=0, prepend=x_scaled[[0], :]))
         diff_thr = np.nanpercentile(first_diff, 95)
         spike_mask = (total_score > tau) & (first_diff > diff_thr)
         startup_jump_mask = np.repeat(startup_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1) & spike_mask
-        labels[spike_mask & (~raw_missing)] = "spike"
+        step_mask = (first_diff > np.nanpercentile(first_diff, 98)) & (total_score > tau * 0.8)
+        labels[spike_mask & (~raw_missing) & (labels == "normal")] = "spike"
         labels[startup_jump_mask & (~raw_missing)] = "startup_jump"
+        labels[step_mask & (~startup_jump_mask) & (~raw_missing) & (labels == "normal")] = "step_change"
 
         drift_labels = np.zeros_like(x_scaled, dtype=bool)
         run = max(5, self.window_size)
@@ -572,10 +621,9 @@ class BridgeSHMUnsupervisedPreprocessor:
             stuck_labels[:, j] = flat & (total_score[:, j] > tau * 0.6)
         labels[stuck_labels & (~raw_missing) & (labels == "normal")] = "stuck"
 
-        labels[(total_score > tau) & (labels == "normal")] = "graph_inconsistent"
-
-        event_mask_2d = np.repeat(known_event_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
-        labels[event_mask_2d & system_gap_mask] = "known_event_gap"
+        labels[(total_score > tau) & (labels == "normal")] = "cross_sensor_conflict"
+        noise_mask = (total_score > tau * 0.9) & (first_diff <= diff_thr) & (labels == "normal")
+        labels[noise_mask] = "noise"
 
         time_interp = pd.DataFrame(x_scaled).interpolate(limit_direction="both").bfill().ffill().to_numpy()
         graph_est = graph_ref
@@ -592,10 +640,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         fused_scaled = (w1 * rec_est + w2 * time_interp + w3 * graph_est) / wsum
 
         cleaned_scaled = x_scaled.copy()
-        replace_mask = np.isin(
-            labels,
-            ["missing", "spike", "drift", "stuck", "graph_inconsistent", "known_event_gap", "system_gap"],
-        )
+        replace_mask = np.isin(labels, ["device_gap", "spike", "drift", "stuck", "cross_sensor_conflict", "noise"])
         cleaned_scaled[replace_mask] = fused_scaled[replace_mask]
         cleaned = inverse_scale(cleaned_scaled, self.artifacts.median, self.artifacts.iqr)
 
@@ -612,26 +657,26 @@ class BridgeSHMUnsupervisedPreprocessor:
         point_status_df["point_status"] = np.where(point_status_df["abnormal_count"] > 0, "abnormal", "normal")
 
         health_rows = []
+        bridge_event_counter: Counter = Counter()
         for col in self.artifacts.sensor_names:
-            abnormal_ratio = float((label_df[col] != "normal").mean())
-            health_index = max(0.0, 100.0 * (1.0 - abnormal_ratio))
-            label_counts = label_df[col].value_counts()
-            dominant_label = label_counts.idxmax()
+            sensor_labels = label_df[col].astype(str).tolist()
+            device_health, availability, project_score, dominant_issue, c = calc_health_scores(sensor_labels)
+            bridge_event_counter.update(c)
+            sensor_id, sensor_type = split_sensor_name(col)
+            missing_ratio = (c.get("device_gap", 0) + c.get("bridge_wide_gap", 0) + c.get("known_system_gap", 0)) / max(1, len(sensor_labels))
             health_rows.append(
                 {
-                    "sensor": col,
-                    "health_index": round(health_index, 3),
-                    "abnormal_ratio": round(abnormal_ratio, 4),
-                    "dominant_label": dominant_label,
-                    "mean_score": round(float(score_df[col].mean()), 6),
-                    "missing_count": int((label_df[col] == "missing").sum()),
-                    "spike_count": int((label_df[col] == "spike").sum()),
-                    "drift_count": int((label_df[col] == "drift").sum()),
-                    "stuck_count": int((label_df[col] == "stuck").sum()),
-                    "graph_inconsistent_count": int((label_df[col] == "graph_inconsistent").sum()),
-                    "startup_jump_count": int((label_df[col] == "startup_jump").sum()),
-                    "system_gap_count": int((label_df[col] == "system_gap").sum()),
-                    "known_event_gap_count": int((label_df[col] == "known_event_gap").sum()),
+                    "bridge_name": "single_bridge",
+                    "sensor_id": sensor_id,
+                    "sensor_type": sensor_type,
+                    "device_health": round(device_health, 3),
+                    "availability": round(availability, 3),
+                    "project_score": round(project_score, 3),
+                    "dominant_issue": dominant_issue,
+                    "missing_ratio": round(missing_ratio, 4),
+                    "stuck_ratio": round(c.get("stuck", 0) / max(1, len(sensor_labels)), 4),
+                    "drift_ratio": round(c.get("drift", 0) / max(1, len(sensor_labels)), 4),
+                    "spike_ratio": round((c.get("spike", 0) + c.get("noise", 0)) / max(1, len(sensor_labels)), 4),
                 }
             )
 
@@ -639,13 +684,51 @@ class BridgeSHMUnsupervisedPreprocessor:
         cleaned_df.insert(0, "timestamp", timestamps.values)
         score_df.insert(0, "timestamp", timestamps.values)
         label_df.insert(0, "timestamp", timestamps.values)
-        health_df = pd.DataFrame(health_rows).sort_values(by=["health_index", "abnormal_ratio"], ascending=[True, False])
+        health_df = pd.DataFrame(health_rows).sort_values(by=["project_score"], ascending=[True])
+
+        bridge_device_health = float(health_df["device_health"].mean()) if not health_df.empty else 100.0
+        bridge_availability = float(health_df["availability"].mean()) if not health_df.empty else 100.0
+        bridge_project_score = 0.7 * bridge_device_health + 0.3 * bridge_availability
+        total_points = max(1, raw_missing.size)
+        system_missing = bridge_event_counter.get("known_system_gap", 0) + bridge_event_counter.get("bridge_wide_gap", 0)
+        device_missing = bridge_event_counter.get("device_gap", 0)
+        bridge_metrics_df = pd.DataFrame(
+            [
+                {
+                    "bridge_name": "single_bridge",
+                    "samples": len(sensor_df),
+                    "sensor_count": len(self.artifacts.sensor_names),
+                    "total_missing_ratio": round((system_missing + device_missing) / total_points, 4),
+                    "system_missing_ratio": round(system_missing / total_points, 4),
+                    "device_missing_ratio": round(device_missing / total_points, 4),
+                    "avg_device_health": round(bridge_device_health, 3),
+                    "avg_availability": round(bridge_availability, 3),
+                    "bridge_project_score": round(bridge_project_score, 3),
+                }
+            ]
+        )
+        bridge_event_df = pd.DataFrame(
+            [
+                {
+                    "bridge_name": "single_bridge",
+                    "startup_jump_count": int(bridge_event_counter.get("startup_jump", 0)),
+                    "known_system_gap_hours": round(bridge_event_counter.get("known_system_gap", 0) * self.artifacts.sampling_minutes / 60.0, 2),
+                    "device_gap_hours": round(device_missing * self.artifacts.sampling_minutes / 60.0, 2),
+                    "stuck_events": int(bridge_event_counter.get("stuck", 0)),
+                    "drift_events": int(bridge_event_counter.get("drift", 0)),
+                    "step_events": int(bridge_event_counter.get("step_change", 0)),
+                    "spike_events": int(bridge_event_counter.get("spike", 0) + bridge_event_counter.get("noise", 0)),
+                }
+            ]
+        )
 
         return {
             "cleaned_data": cleaned_df,
             "score_data": score_df,
             "label_data": label_df,
-            "sensor_health": health_df,
+            "sensor_health_summary": health_df,
+            "bridge_test_metrics": bridge_metrics_df,
+            "bridge_event_summary": bridge_event_df,
             "point_status": point_status_df,
         }
 
@@ -669,7 +752,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         cleaned_df = outputs["cleaned_data"].copy()
         score_df = outputs["score_data"].copy()
         label_df = outputs["label_data"].copy()
-        health_df = outputs["sensor_health"].copy()
+        health_df = outputs["sensor_health_summary"].copy()
         point_status_df = outputs["point_status"].copy()
 
         def save_and_track(fig: plt.Figure, filename: str) -> None:
@@ -708,12 +791,13 @@ class BridgeSHMUnsupervisedPreprocessor:
         save_and_track(fig, "anomaly_score_heatmap.png")
 
         # 4) 传感器健康指数条形图
-        worst_health = health_df.nsmallest(min(12, len(health_df)), "health_index")
+        worst_health = health_df.nsmallest(min(12, len(health_df)), "project_score")
         fig, ax = plt.subplots(figsize=(8.0, max(4.0, 0.35 * len(worst_health) + 1.2)))
-        ax.barh(worst_health["sensor"], worst_health["health_index"])
+        sensor_name = worst_health["sensor_id"] + "|" + worst_health["sensor_type"]
+        ax.barh(sensor_name, worst_health["project_score"])
         ax.invert_yaxis()
-        ax.set_title("Worst Sensor Health Index")
-        ax.set_xlabel("Health Index")
+        ax.set_title("Worst Sensor Project Score")
+        ax.set_xlabel("Project Score")
         ax.set_xlim(0, 100)
         ax.grid(axis="x", alpha=0.25)
         save_and_track(fig, "sensor_health_barh.png")
@@ -733,18 +817,19 @@ class BridgeSHMUnsupervisedPreprocessor:
         save_and_track(fig, "abnormal_count_over_time.png")
 
         # 6) 原始-清洗对比图（挑选最差的若干传感器）
-        top_sensors = health_df["sensor"].head(min(plot_top_k, len(health_df))).tolist()
+        top_sensors = [f"{sid}_{st}" for sid, st in zip(health_df["sensor_id"], health_df["sensor_type"])]
+        top_sensors = top_sensors[: min(plot_top_k, len(top_sensors))]
         nrows = len(top_sensors)
         fig, axes = plt.subplots(nrows=nrows, ncols=1, figsize=(12, max(3.2 * nrows, 3.5)), sharex=True)
         if nrows == 1:
             axes = [axes]
 
         label_colors = {
-            "missing": "black",
+            "device_gap": "black",
             "spike": "red",
             "drift": "orange",
             "stuck": "purple",
-            "graph_inconsistent": "brown",
+            "cross_sensor_conflict": "brown",
         }
 
         for ax, sensor in zip(axes, top_sensors):
