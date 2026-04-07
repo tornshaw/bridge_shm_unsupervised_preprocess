@@ -1,4 +1,4 @@
-﻿bridge,sampling_minutes,rows_after_align,sensor_count,bridge_health_index,missing,known_event_gap,system_gap,startup_jump,spike,drift,stuck
-沥心沙大桥_20251201_20260318,10,11260,70,59.195,44887,130933,32270,9394,53723,14232,32780
-浅海大桥_20251201_20260318,10,12266,22,61.409,16213,30485,27720,1666,16552,5385,33
-新榄核大桥_20251201_20260318,10,11288,31,77.131,9737,42028,15562,3435,11907,2852,21
+﻿bridge_name,samples,sensor_count,total_missing_ratio,system_missing_ratio,device_missing_ratio,avg_device_health,avg_availability,bridge_project_score
+沥心沙大桥_20251201_20260318,11260,70,0.2649,0.1617,0.1032,52.767,82.97,61.828
+浅海大桥_20251201_20260318,12266,22,0.2761,0.213,0.0631,67.149,76.6,69.984
+新榄核大桥_20251201_20260318,11288,31,0.1929,0.16,0.0329,81.309,83.092,81.844
