@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""桥梁健康监测无监督预处理（最终版，标准库实现）"""
+"""桥梁健康监测无监督预处理（最终版，双层健康评分）"""
 from __future__ import annotations
 
 import argparse
@@ -18,21 +18,24 @@ KNOWN_IOT_START = dt.datetime(2026, 1, 25)
 KNOWN_IOT_END = dt.datetime(2026, 2, 5, 23, 59, 59)
 KNOWN_DB_START = dt.datetime(2026, 2, 20)
 KNOWN_DB_END = dt.datetime(2026, 3, 10, 23, 59, 59)
+STARTUP_START = dt.datetime(2025, 12, 1)
 STARTUP_END = dt.datetime(2026, 1, 10, 23, 59, 59)
 
 
 @dataclass
 class SensorStats:
+    bridge_name: str
     sensor: str
-    health_index: float
-    abnormal_ratio: float
-    dominant_label: str
-    missing_count: int
-    known_event_gap_count: int
-    spike_count: int
-    drift_count: int
-    stuck_count: int
-    startup_jump_count: int
+    sensor_id: str
+    sensor_type: str
+    device_health: float
+    availability: float
+    project_score: float
+    dominant_issue: str
+    missing_ratio: float
+    stuck_ratio: float
+    drift_ratio: float
+    spike_ratio: float
 
 
 def parse_time(s: str) -> dt.datetime:
@@ -45,6 +48,10 @@ def fmt_time(t: dt.datetime) -> str:
 
 def is_known_event_window(t: dt.datetime) -> bool:
     return (KNOWN_IOT_START <= t <= KNOWN_IOT_END) or (KNOWN_DB_START <= t <= KNOWN_DB_END)
+
+
+def is_startup_window(t: dt.datetime) -> bool:
+    return STARTUP_START <= t <= STARTUP_END
 
 
 def median(values: Sequence[float], default: float = 0.0) -> float:
@@ -131,99 +138,45 @@ def align_regular_grid(
     return all_ts, all_rows, inserted, interval
 
 
-def detect_sensor_labels(
-    ts: List[dt.datetime],
-    values: List[Optional[float]],
-    inserted_gap: List[bool],
-) -> Tuple[List[str], List[Optional[float]]]:
-    n = len(values)
-    labels = ["normal"] * n
-
-    for i, v in enumerate(values):
-        if v is None:
-            labels[i] = "missing"
-        if inserted_gap[i] and labels[i] == "missing":
-            labels[i] = "system_gap"
-        if labels[i] in {"missing", "system_gap"} and is_known_event_window(ts[i]):
-            labels[i] = "known_event_gap"
-
-    filled = linear_interpolate_column(ts, values)
-
-    diffs = []
-    for i in range(1, n):
-        a, b = filled[i - 1], filled[i]
-        if a is not None and b is not None:
-            diffs.append(abs(b - a))
-    spike_thr = robust_threshold(diffs, k=8.0)
-
-    startup_mask = [t <= STARTUP_END for t in ts]
-    for i in range(1, n):
-        a, b = filled[i - 1], filled[i]
-        if a is None or b is None:
-            continue
-        d = abs(b - a)
-        if d > spike_thr and labels[i] in {"normal", "missing"}:
-            labels[i] = "startup_jump" if startup_mask[i] else "spike"
-
-    # 简化 drift：24 点窗口均值偏差（约 4 小时）
-    window = 36
-    valid_vals = [v for v in filled if v is not None]
-    center = median(valid_vals, 0.0)
-    spread = mad(valid_vals, center=center)
-    drift_thr = max(5.0 * spread, 1e-6)
-    drift_candidate = [False] * n
-    for i in range(n):
-        if i < window or filled[i] is None:
-            continue
-        seg = [v for v in filled[i - window + 1 : i + 1] if v is not None]
-        if len(seg) < window // 2:
-            continue
-        m = sum(seg) / len(seg)
-        if abs(m - center) > drift_thr and labels[i] == "normal":
-            drift_candidate[i] = True
-    for i in range(5, n):
-        if labels[i] != "normal":
-            continue
-        if sum(1 for x in drift_candidate[i - 5 : i + 1] if x) >= 5:
-            labels[i] = "drift"
-
-    # stuck：连续 12 点变化几乎为 0（约 2 小时）
-    run = 24
-    eps = max(spread * 0.02, 1e-5)
-    for i in range(run - 1, n):
-        seg = filled[i - run + 1 : i + 1]
-        if any(v is None for v in seg):
-            continue
-        if max(seg) - min(seg) <= eps and labels[i] == "normal":
-            labels[i] = "stuck"
-
-    cleaned = list(filled)
-    for i, lb in enumerate(labels):
-        if lb in {"spike", "drift", "stuck", "missing", "system_gap", "known_event_gap"}:
-            cleaned[i] = filled[i]
-        elif lb == "startup_jump":
-            # 启动阶段跳变降低误报，保守不修复
-            cleaned[i] = values[i] if values[i] is not None else filled[i]
-
-    return labels, cleaned
+def run_lengths(flags: List[bool]) -> List[int]:
+    out = [0] * len(flags)
+    cnt = 0
+    for i, f in enumerate(flags):
+        cnt = cnt + 1 if f else 0
+        out[i] = cnt
+    return out
 
 
-def health_from_labels(labels: List[str]) -> Tuple[float, float, str]:
-    n = len(labels)
+def calc_health_scores(labels: List[str]) -> Tuple[float, float, float, str, Dict[str, int]]:
+    n = max(1, len(labels))
     c = Counter(labels)
-    weighted = (
-        c.get("missing", 0) * 1.0
-        + c.get("system_gap", 0) * 1.0
-        + c.get("known_event_gap", 0) * 0.6
-        + c.get("spike", 0) * 2.0
-        + c.get("drift", 0) * 1.5
-        + c.get("stuck", 0) * 2.0
-        + c.get("startup_jump", 0) * 0.4
-    )
-    abnormal_ratio = (n - c.get("normal", 0)) / max(n, 1)
-    hi = max(0.0, min(100.0, 100.0 * (1.0 - weighted / max(n, 1))))
-    dominant = c.most_common(1)[0][0] if c else "normal"
-    return hi, abnormal_ratio, dominant
+
+    device_weights = {
+        "device_gap": 2.2,
+        "stuck": 2.4,
+        "drift": 1.8,
+        "step_change": 1.8,
+        "spike": 1.3,
+        "noise": 1.0,
+        "cross_sensor_conflict": 1.5,
+        "startup_jump": 0.2,
+    }
+    avail_weights = {
+        "known_system_gap": 1.0,
+        "bridge_wide_gap": 1.2,
+    }
+
+    d_penalty = sum(c.get(k, 0) * w for k, w in device_weights.items())
+    a_penalty = sum(c.get(k, 0) * w for k, w in avail_weights.items())
+
+    device_health = max(0.0, min(100.0, 100.0 * (1.0 - d_penalty / n)))
+    availability = max(0.0, min(100.0, 100.0 * (1.0 - a_penalty / n)))
+    project_score = 0.7 * device_health + 0.3 * availability
+
+    dominant_issue = c.most_common(1)[0][0] if c else "normal"
+    if dominant_issue == "normal" and len(c) > 1:
+        dominant_issue = max((k for k in c if k != "normal"), key=lambda x: c[x], default="normal")
+    return device_health, availability, project_score, dominant_issue, c
 
 
 def save_csv(path: str, header: List[str], rows: List[List[object]]) -> None:
@@ -234,27 +187,11 @@ def save_csv(path: str, header: List[str], rows: List[List[object]]) -> None:
         w.writerows(rows)
 
 
-def save_health_svg(path: str, health_rows: List[SensorStats], top_k: int = 20) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    target = sorted(health_rows, key=lambda x: x.health_index)[:top_k]
-    width = 1200
-    bar_h = 22
-    gap = 8
-    left = 260
-    height = 80 + len(target) * (bar_h + gap)
-    lines = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">']
-    lines.append('<rect width="100%" height="100%" fill="white"/>')
-    lines.append('<text x="20" y="30" font-size="20" font-family="Arial">Worst Sensor Health Index (Top)</text>')
-    for i, row in enumerate(target):
-        y = 60 + i * (bar_h + gap)
-        bw = int((width - left - 80) * max(0.0, min(100.0, row.health_index)) / 100.0)
-        color = "#d73027" if row.health_index < 60 else ("#fc8d59" if row.health_index < 80 else "#91cf60")
-        lines.append(f'<text x="20" y="{y+16}" font-size="12" font-family="Arial">{row.sensor}</text>')
-        lines.append(f'<rect x="{left}" y="{y}" width="{bw}" height="{bar_h}" fill="{color}"/>')
-        lines.append(f'<text x="{left+bw+8}" y="{y+16}" font-size="12" font-family="Arial">{row.health_index:.1f}</text>')
-    lines.append("</svg>")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+def split_sensor_name(sensor: str) -> Tuple[str, str]:
+    if "_" in sensor:
+        sid, stype = sensor.rsplit("_", 1)
+        return sid, stype
+    return sensor, "unknown"
 
 
 def process_bridge(csv_path: str, output_root: str) -> Dict[str, object]:
@@ -283,134 +220,343 @@ def process_bridge(csv_path: str, output_root: str) -> Dict[str, object]:
         rows.append(vals)
 
     ts, data, inserted, sampling_min = align_regular_grid(timestamps, rows)
+    n = len(ts)
+
+    bridge_missing = [0] * n
+    for i, row in enumerate(data):
+        bridge_missing[i] = sum(1 for v in row if v is None)
+    bridge_wide_gap = [bridge_missing[i] >= max(2, int(0.8 * len(sensors))) or inserted[i] for i in range(n)]
+
+    typed_values: Dict[str, List[List[Optional[float]]]] = defaultdict(list)
+    sensor_to_type: Dict[str, str] = {}
+    for j, s in enumerate(sensors):
+        _, stype = split_sensor_name(s)
+        sensor_to_type[s] = stype
+        typed_values[stype].append([row[j] for row in data])
+
+    type_medians: Dict[str, List[Optional[float]]] = {}
+    for stype, cols in typed_values.items():
+        med_col = []
+        for i in range(n):
+            vals = [col[i] for col in cols if col[i] is not None]
+            med_col.append(statistics.median(vals) if vals else None)
+        type_medians[stype] = med_col
 
     per_sensor_labels: Dict[str, List[str]] = {}
     per_sensor_clean: Dict[str, List[Optional[float]]] = {}
-    health_rows: List[SensorStats] = []
+    sensor_health_rows: List[SensorStats] = []
+    bridge_event_counter = Counter()
 
     for j, s in enumerate(sensors):
+        stype = sensor_to_type[s]
         col = [row[j] for row in data]
-        labels, cleaned = detect_sensor_labels(ts, col, inserted)
+        filled = linear_interpolate_column(ts, col)
+        labels = ["normal"] * n
+
+        abs_diff = [abs(filled[i] - filled[i - 1]) for i in range(1, n) if filled[i] is not None and filled[i - 1] is not None]
+        diff_thr = robust_threshold(abs_diff, k=6.0)
+        mad_center = median([v for v in filled if v is not None], 0.0)
+        val_mad = mad([v for v in filled if v is not None], mad_center)
+
+        diff_evidence = [False] * n
+        mad_evidence = [False] * n
+        var_evidence = [False] * n
+        cross_evidence = [False] * n
+
+        for i in range(1, n):
+            if filled[i] is None or filled[i - 1] is None:
+                continue
+            local_thr = diff_thr * (2.0 if is_startup_window(ts[i]) else 1.0)
+            if abs(filled[i] - filled[i - 1]) > local_thr:
+                diff_evidence[i] = True
+
+        for i in range(n):
+            if filled[i] is None:
+                continue
+            local_k = 8.0 if is_startup_window(ts[i]) else 5.0
+            if abs(filled[i] - mad_center) > local_k * val_mad:
+                mad_evidence[i] = True
+
+        win = 24
+        for i in range(win - 1, n):
+            seg = [v for v in filled[i - win + 1 : i + 1] if v is not None]
+            if len(seg) < max(6, win // 2):
+                continue
+            seg_var = statistics.pvariance(seg) if len(seg) > 1 else 0.0
+            if seg_var > (9.0 * (val_mad ** 2)):
+                var_evidence[i] = True
+
+        type_ref = type_medians[stype]
+        for i in range(n):
+            if filled[i] is None or type_ref[i] is None:
+                continue
+            if abs(filled[i] - type_ref[i]) > 6.0 * max(val_mad, 1e-6):
+                cross_evidence[i] = True
+
+        missing_flags = [v is None for v in col]
+        missing_runs = run_lengths(missing_flags)
+        for i in range(n):
+            if not missing_flags[i]:
+                continue
+            if is_known_event_window(ts[i]) and bridge_wide_gap[i]:
+                labels[i] = "known_system_gap"
+            elif bridge_wide_gap[i]:
+                labels[i] = "bridge_wide_gap"
+            else:
+                labels[i] = "device_gap"
+
+        step_cand = [False] * n
+        for i in range(1, n):
+            if labels[i] != "normal":
+                continue
+            evidence = sum([diff_evidence[i], mad_evidence[i], cross_evidence[i]])
+            if evidence >= 2:
+                step_cand[i] = True
+        for i in range(2, n):
+            if step_cand[i] and step_cand[i - 1] and labels[i] == "normal":
+                labels[i] = "startup_jump" if is_startup_window(ts[i]) else "step_change"
+
+        low_var_eps = max(val_mad * 0.05, 1e-5)
+        stable_run = 0
+        for i in range(1, n):
+            if filled[i] is None or filled[i - 1] is None:
+                stable_run = 0
+                continue
+            if abs(filled[i] - filled[i - 1]) <= low_var_eps:
+                stable_run += 1
+            else:
+                stable_run = 0
+            if i >= 35 and labels[i] == "normal" and stable_run >= 20:
+                seg = [v for v in filled[i - 35 : i + 1] if v is not None]
+                if len(seg) >= 30 and (max(seg) - min(seg)) <= low_var_eps:
+                    labels[i] = "stuck"
+
+        # drift: 滑窗斜率 + 同类偏离
+        for i in range(48, n):
+            if labels[i] != "normal":
+                continue
+            x = []
+            y = []
+            for k in range(i - 47, i + 1):
+                if filled[k] is not None:
+                    x.append(k)
+                    y.append(filled[k])
+            if len(y) < 36:
+                continue
+            mx = sum(x) / len(x)
+            my = sum(y) / len(y)
+            den = sum((xx - mx) ** 2 for xx in x) + 1e-9
+            slope = sum((xx - mx) * (yy - my) for xx, yy in zip(x, y)) / den
+            if abs(slope) > max(0.03 * val_mad, 1e-5) and cross_evidence[i]:
+                labels[i] = "drift"
+
+        for i in range(n):
+            if labels[i] != "normal":
+                continue
+            evidence = sum([mad_evidence[i], diff_evidence[i], var_evidence[i], cross_evidence[i]])
+            if evidence >= 2:
+                labels[i] = "spike"
+            elif var_evidence[i] and mad_evidence[i]:
+                labels[i] = "noise"
+            elif cross_evidence[i] and mad_evidence[i]:
+                labels[i] = "cross_sensor_conflict"
+
+        cleaned = list(filled)
+        for i in range(n):
+            if labels[i] in {"known_system_gap", "bridge_wide_gap"}:
+                cleaned[i] = None
+            elif labels[i] == "device_gap":
+                cleaned[i] = filled[i] if missing_runs[i] <= 6 else None
+
         per_sensor_labels[s] = labels
         per_sensor_clean[s] = cleaned
-        hi, abnormal_ratio, dominant = health_from_labels(labels)
-        c = Counter(labels)
-        health_rows.append(
+
+        device_health, availability, project_score, dominant_issue, counter = calc_health_scores(labels)
+        sensor_id, sensor_type = split_sensor_name(s)
+        sensor_health_rows.append(
             SensorStats(
+                bridge_name=bridge,
                 sensor=s,
-                health_index=round(hi, 3),
-                abnormal_ratio=round(abnormal_ratio, 4),
-                dominant_label=dominant,
-                missing_count=c.get("missing", 0),
-                known_event_gap_count=c.get("known_event_gap", 0),
-                spike_count=c.get("spike", 0),
-                drift_count=c.get("drift", 0),
-                stuck_count=c.get("stuck", 0),
-                startup_jump_count=c.get("startup_jump", 0),
+                sensor_id=sensor_id,
+                sensor_type=sensor_type,
+                device_health=round(device_health, 3),
+                availability=round(availability, 3),
+                project_score=round(project_score, 3),
+                dominant_issue=dominant_issue,
+                missing_ratio=round((counter.get("device_gap", 0) + counter.get("known_system_gap", 0) + counter.get("bridge_wide_gap", 0)) / n, 4),
+                stuck_ratio=round(counter.get("stuck", 0) / n, 4),
+                drift_ratio=round(counter.get("drift", 0) / n, 4),
+                spike_ratio=round((counter.get("spike", 0) + counter.get("noise", 0)) / n, 4),
             )
         )
+        bridge_event_counter.update(counter)
 
-    # 输出 cleaned_data
-    cleaned_rows = []
-    label_rows = []
-    point_rows = []
+    cleaned_rows, label_rows = [], []
     for i, t in enumerate(ts):
         c_row = [fmt_time(t)]
         l_row = [fmt_time(t)]
-        abnormal_count = 0
         for s in sensors:
             v = per_sensor_clean[s][i]
             c_row.append("" if v is None else f"{v:.6f}")
-            lb = per_sensor_labels[s][i]
-            l_row.append(lb)
-            if lb != "normal":
-                abnormal_count += 1
+            l_row.append(per_sensor_labels[s][i])
         cleaned_rows.append(c_row)
         label_rows.append(l_row)
-        point_rows.append([fmt_time(t), abnormal_count, "abnormal" if abnormal_count else "normal"])
 
     save_csv(os.path.join(out_dir, "cleaned_data.csv"), ["timestamp"] + sensors, cleaned_rows)
     save_csv(os.path.join(out_dir, "label_data.csv"), ["timestamp"] + sensors, label_rows)
 
-    health_table = [[
-        h.sensor,
-        f"{h.health_index:.3f}",
-        f"{h.abnormal_ratio:.4f}",
-        h.dominant_label,
-        h.missing_count,
-        h.known_event_gap_count,
-        h.spike_count,
-        h.drift_count,
-        h.stuck_count,
-        h.startup_jump_count,
-    ] for h in sorted(health_rows, key=lambda x: x.health_index)]
+    sensor_summary_rows = []
+    for h in sorted(sensor_health_rows, key=lambda x: x.project_score):
+        sensor_summary_rows.append([
+            h.bridge_name,
+            h.sensor_id,
+            h.sensor_type,
+            f"{h.device_health:.3f}",
+            f"{h.availability:.3f}",
+            f"{h.project_score:.3f}",
+            h.dominant_issue,
+            f"{h.missing_ratio:.4f}",
+            f"{h.stuck_ratio:.4f}",
+            f"{h.drift_ratio:.4f}",
+            f"{h.spike_ratio:.4f}",
+        ])
     save_csv(
-        os.path.join(out_dir, "sensor_health.csv"),
+        os.path.join(out_dir, "sensor_health_summary.csv"),
         [
-            "sensor",
-            "health_index",
-            "abnormal_ratio",
-            "dominant_label",
-            "missing_count",
-            "known_event_gap_count",
-            "spike_count",
-            "drift_count",
-            "stuck_count",
-            "startup_jump_count",
+            "bridge_name",
+            "sensor_id",
+            "sensor_type",
+            "device_health",
+            "availability",
+            "project_score",
+            "dominant_issue",
+            "missing_ratio",
+            "stuck_ratio",
+            "drift_ratio",
+            "spike_ratio",
         ],
-        health_table,
+        sensor_summary_rows,
     )
-    save_csv(os.path.join(out_dir, "point_status.csv"), ["timestamp", "abnormal_count", "point_status"], point_rows)
-    save_health_svg(os.path.join(out_dir, "sensor_health_top.svg"), health_rows)
 
-    # 桥级指标
-    all_labels = [lb for s in sensors for lb in per_sensor_labels[s]]
-    c_all = Counter(all_labels)
-    bridge_health = sum(h.health_index for h in health_rows) / max(len(health_rows), 1)
+    bridge_device_health = sum(h.device_health for h in sensor_health_rows) / max(1, len(sensor_health_rows))
+    bridge_availability = sum(h.availability for h in sensor_health_rows) / max(1, len(sensor_health_rows))
+    bridge_project_score = 0.7 * bridge_device_health + 0.3 * bridge_availability
+
+    total_points = max(1, len(ts) * len(sensors))
+    system_missing = bridge_event_counter.get("known_system_gap", 0) + bridge_event_counter.get("bridge_wide_gap", 0)
+    device_missing = bridge_event_counter.get("device_gap", 0)
+    total_missing = system_missing + device_missing
+
+    event_summary = {
+        "bridge_name": bridge,
+        "startup_jump_count": bridge_event_counter.get("startup_jump", 0),
+        "known_system_gap_hours": round(bridge_event_counter.get("known_system_gap", 0) * sampling_min / 60.0, 2),
+        "device_gap_hours": round(device_missing * sampling_min / 60.0, 2),
+        "stuck_events": bridge_event_counter.get("stuck", 0),
+        "drift_events": bridge_event_counter.get("drift", 0),
+        "step_events": bridge_event_counter.get("step_change", 0),
+        "spike_events": bridge_event_counter.get("spike", 0) + bridge_event_counter.get("noise", 0),
+    }
+
     return {
-        "bridge": bridge,
-        "sampling_minutes": sampling_min,
-        "rows_after_align": len(ts),
+        "bridge_name": bridge,
+        "samples": len(ts),
         "sensor_count": len(sensors),
-        "bridge_health_index": round(bridge_health, 3),
-        "missing": c_all.get("missing", 0),
-        "known_event_gap": c_all.get("known_event_gap", 0),
-        "spike": c_all.get("spike", 0),
-        "drift": c_all.get("drift", 0),
-        "stuck": c_all.get("stuck", 0),
-        "startup_jump": c_all.get("startup_jump", 0),
-        "system_gap": c_all.get("system_gap", 0),
+        "total_missing_ratio": round(total_missing / total_points, 4),
+        "system_missing_ratio": round(system_missing / total_points, 4),
+        "device_missing_ratio": round(device_missing / total_points, 4),
+        "avg_device_health": round(bridge_device_health, 3),
+        "avg_availability": round(bridge_availability, 3),
+        "bridge_project_score": round(bridge_project_score, 3),
+        "event_summary": event_summary,
+        "sensor_summary_rows": sensor_summary_rows,
     }
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="多桥梁无监督数据预处理最终模型")
+    p = argparse.ArgumentParser(description="多桥梁无监督数据预处理最终模型（双层评分）")
     p.add_argument("--data_dir", default="data")
     p.add_argument("--output_dir", default="outputs/final")
     args = p.parse_args()
 
     csv_files = sorted([os.path.join(args.data_dir, x) for x in os.listdir(args.data_dir) if x.endswith(".csv")])
-    results = []
+    bridge_rows = []
+    sensor_rows = []
+    event_rows = []
+
     for fp in csv_files:
-        results.append(process_bridge(fp, args.output_dir))
+        r = process_bridge(fp, args.output_dir)
+        bridge_rows.append([r[k] for k in [
+            "bridge_name",
+            "samples",
+            "sensor_count",
+            "total_missing_ratio",
+            "system_missing_ratio",
+            "device_missing_ratio",
+            "avg_device_health",
+            "avg_availability",
+            "bridge_project_score",
+        ]])
+        sensor_rows.extend(r["sensor_summary_rows"])
+        e = r["event_summary"]
+        event_rows.append([e[k] for k in [
+            "bridge_name",
+            "startup_jump_count",
+            "known_system_gap_hours",
+            "device_gap_hours",
+            "stuck_events",
+            "drift_events",
+            "step_events",
+            "spike_events",
+        ]])
         print(f"processed: {os.path.basename(fp)}")
 
-    summary_header = [
-        "bridge",
-        "sampling_minutes",
-        "rows_after_align",
-        "sensor_count",
-        "bridge_health_index",
-        "missing",
-        "known_event_gap",
-        "system_gap",
-        "startup_jump",
-        "spike",
-        "drift",
-        "stuck",
-    ]
-    summary_rows = [[r[h] for h in summary_header] for r in results]
-    save_csv(os.path.join(args.output_dir, "bridge_test_metrics.csv"), summary_header, summary_rows)
+    save_csv(
+        os.path.join(args.output_dir, "bridge_test_metrics.csv"),
+        [
+            "bridge_name",
+            "samples",
+            "sensor_count",
+            "total_missing_ratio",
+            "system_missing_ratio",
+            "device_missing_ratio",
+            "avg_device_health",
+            "avg_availability",
+            "bridge_project_score",
+        ],
+        bridge_rows,
+    )
+    save_csv(
+        os.path.join(args.output_dir, "sensor_health_summary.csv"),
+        [
+            "bridge_name",
+            "sensor_id",
+            "sensor_type",
+            "device_health",
+            "availability",
+            "project_score",
+            "dominant_issue",
+            "missing_ratio",
+            "stuck_ratio",
+            "drift_ratio",
+            "spike_ratio",
+        ],
+        sensor_rows,
+    )
+    save_csv(
+        os.path.join(args.output_dir, "bridge_event_summary.csv"),
+        [
+            "bridge_name",
+            "startup_jump_count",
+            "known_system_gap_hours",
+            "device_gap_hours",
+            "stuck_events",
+            "drift_events",
+            "step_events",
+            "spike_events",
+        ],
+        event_rows,
+    )
     print(f"saved summary: {os.path.join(args.output_dir, 'bridge_test_metrics.csv')}")
 
 
