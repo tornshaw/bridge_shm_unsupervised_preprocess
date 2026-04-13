@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""桥梁健康监测无监督预处理（最终版，双层健康评分）"""
+"""桥梁健康监测无监督预处理（普通预处理方法最终版，双层健康评分）"""
 from __future__ import annotations
 
 import argparse

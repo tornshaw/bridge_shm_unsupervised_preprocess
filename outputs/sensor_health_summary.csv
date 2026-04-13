@@ -1,0 +1,11 @@
+﻿sensor_name,bridge_name,sensor_id,sensor_type,device_health,availability,project_score,dominant_issue,missing_ratio,stuck_ratio,drift_ratio,spike_ratio
+S02,single_bridge,S02,unknown,93.95,100.0,95.765,device_gap,0.0275,0.0,0.0,0.0
+S10,single_bridge,S10,unknown,96.7,100.0,97.69,device_gap,0.015,0.0,0.0,0.0
+S04,single_bridge,S04,unknown,99.1,100.0,99.37,step_change,0.0,0.0,0.0,0.0
+S01,single_bridge,S01,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S03,single_bridge,S03,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S05,single_bridge,S05,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S06,single_bridge,S06,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S07,single_bridge,S07,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S08,single_bridge,S08,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0
+S09,single_bridge,S09,unknown,100.0,100.0,100.0,normal,0.0,0.0,0.0,0.0

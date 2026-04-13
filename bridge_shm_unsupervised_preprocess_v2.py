@@ -22,20 +22,22 @@
     - csv 文件：第一列可为时间戳，其余列为传感器数值
     - 可选 positions csv：包含 [sensor, x, y, z] 或 [sensor, x, y]
 输出：
-    - cleaned_data.csv        修复后的数据
-    - score_data.csv          综合质量评分
-    - label_data.csv          异常标签
-    - sensor_health.csv       传感器健康摘要
-    - *.png                   可视化图件
+    - cleaned_data.csv             修复后的数据
+    - score_data.csv               综合质量评分
+    - label_data.csv               异常标签
+    - sensor_health_summary.csv    传感器健康摘要
+    - bridge_test_metrics.csv      桥级测试指标
+    - bridge_event_summary.csv     桥级事件摘要
+    - point_status.csv             时刻级状态摘要
+    - *.png                        可视化图件
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
-import math
 import os
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
@@ -52,6 +54,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+
 KNOWN_IOT_START = dt.datetime(2026, 1, 25)
 KNOWN_IOT_END = dt.datetime(2026, 2, 5, 23, 59, 59)
 KNOWN_DB_START = dt.datetime(2026, 2, 20)
@@ -66,7 +69,8 @@ STARTUP_END = dt.datetime(2026, 1, 10, 23, 59, 59)
 def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     torch.set_num_threads(1)
     try:
         torch.set_num_interop_threads(1)
@@ -118,22 +122,28 @@ def robust_zscore(x: np.ndarray, eps: float = 1e-6) -> np.ndarray:
 
 def infer_threshold_gmm(score: np.ndarray) -> float:
     """使用双高斯混合自动确定异常阈值。若失败则退化为 median + 3*MAD。"""
-    score = score.reshape(-1, 1)
+    score = np.asarray(score, dtype=float).reshape(-1, 1)
+    finite_mask = np.isfinite(score[:, 0])
+    score = score[finite_mask]
+    if len(score) == 0:
+        return 3.0
+
     try:
         gmm = GaussianMixture(n_components=2, covariance_type="full", random_state=42)
         gmm.fit(score)
         means = gmm.means_.flatten()
         covs = np.sqrt(gmm.covariances_.reshape(-1))
         weights = gmm.weights_.flatten()
+
         idx = np.argsort(means)
         m1, m2 = means[idx]
         s1, s2 = covs[idx]
         w1, w2 = weights[idx]
 
-        xs = np.linspace(score.min(), score.max(), 2000).reshape(-1, 1)
-        p1 = w1 * (1 / (np.sqrt(2 * np.pi) * s1)) * np.exp(-0.5 * ((xs - m1) / s1) ** 2)
-        p2 = w2 * (1 / (np.sqrt(2 * np.pi) * s2)) * np.exp(-0.5 * ((xs - m2) / s2) ** 2)
-        cross_idx = np.argmin(np.abs(p1 - p2))
+        xs = np.linspace(float(score.min()), float(score.max()), 2000).reshape(-1, 1)
+        p1 = w1 * (1 / (np.sqrt(2 * np.pi) * max(s1, 1e-6))) * np.exp(-0.5 * ((xs - m1) / max(s1, 1e-6)) ** 2)
+        p2 = w2 * (1 / (np.sqrt(2 * np.pi) * max(s2, 1e-6))) * np.exp(-0.5 * ((xs - m2) / max(s2, 1e-6)) ** 2)
+        cross_idx = int(np.argmin(np.abs(p1 - p2)))
         tau = float(xs[cross_idx, 0])
         if not np.isfinite(tau):
             raise ValueError("invalid tau")
@@ -141,6 +151,24 @@ def infer_threshold_gmm(score: np.ndarray) -> float:
     except Exception:
         s = score.flatten()
         return float(np.median(s) + 3.0 * safe_mad(s))
+
+
+def _try_parse_numeric_timestamp(series: pd.Series) -> pd.Series:
+    """尝试把纯数字时间戳解析成 datetime。优先秒，再毫秒。"""
+    s = pd.to_numeric(series, errors="coerce")
+    valid = s.notna().mean()
+    if valid < 0.7:
+        return pd.Series([pd.NaT] * len(series))
+
+    parsed_s = pd.to_datetime(s, unit="s", errors="coerce")
+    if parsed_s.notna().mean() > 0.7:
+        return parsed_s
+
+    parsed_ms = pd.to_datetime(s, unit="ms", errors="coerce")
+    if parsed_ms.notna().mean() > 0.7:
+        return parsed_ms
+
+    return pd.Series([pd.NaT] * len(series))
 
 
 def infer_time_column(df: pd.DataFrame) -> Tuple[pd.Series, bool]:
@@ -152,7 +180,18 @@ def infer_time_column(df: pd.DataFrame) -> Tuple[pd.Series, bool]:
     first_col = df.iloc[:, 0]
     timestamp_like_names = {"timestamp", "time", "datetime", "date", "时间", "日期"}
 
-    if first_name in timestamp_like_names or not pd.api.types.is_numeric_dtype(first_col):
+    # 优先按“列名像时间列”处理
+    if first_name in timestamp_like_names:
+        if pd.api.types.is_numeric_dtype(first_col):
+            parsed = _try_parse_numeric_timestamp(first_col)
+        else:
+            parsed = pd.to_datetime(first_col, errors="coerce")
+        if parsed.notna().mean() > 0.7:
+            return parsed, True
+        return first_col.astype(str), False
+
+    # 非数值列，也尝试解析为时间
+    if not pd.api.types.is_numeric_dtype(first_col):
         parsed = pd.to_datetime(first_col, errors="coerce")
         if parsed.notna().mean() > 0.7:
             return parsed, True
@@ -163,14 +202,10 @@ def infer_time_column(df: pd.DataFrame) -> Tuple[pd.Series, bool]:
 
 def get_sensor_frame(df: pd.DataFrame) -> pd.DataFrame:
     """提取传感器数值列；若首列被判定为时间列，则从第二列开始选。"""
-    time_axis, has_datetime = infer_time_column(df)
-    _ = time_axis, has_datetime
+    _, has_datetime = infer_time_column(df)
 
     if df.shape[1] >= 2:
-        first_col = df.iloc[:, 0]
-        first_name = str(df.columns[0]).strip().lower()
-        timestamp_like_names = {"timestamp", "time", "datetime", "date", "时间", "日期"}
-        if first_name in timestamp_like_names or not pd.api.types.is_numeric_dtype(first_col):
+        if has_datetime:
             candidate = df.iloc[:, 1:]
         else:
             candidate = df
@@ -205,7 +240,7 @@ def infer_sampling_minutes(time_axis: pd.Series, fallback: int = 10) -> int:
     """估计采样周期（分钟），用于补齐掉线造成的时间缺口。"""
     if not pd.api.types.is_datetime64_any_dtype(time_axis):
         return fallback
-    deltas = time_axis.sort_values().diff().dropna().dt.total_seconds() / 60.0
+    deltas = pd.Series(time_axis).sort_values().diff().dropna().dt.total_seconds() / 60.0
     deltas = deltas[(deltas > 0) & np.isfinite(deltas)]
     if deltas.empty:
         return fallback
@@ -225,6 +260,9 @@ def align_to_regular_timeline(df: pd.DataFrame, sampling_minutes: Optional[int] 
     work.iloc[:, 0] = pd.to_datetime(work.iloc[:, 0], errors="coerce")
     work = work.dropna(subset=[work.columns[0]]).drop_duplicates(subset=[work.columns[0]], keep="last")
     work = work.sort_values(work.columns[0]).reset_index(drop=True)
+
+    if work.empty:
+        return df.copy(), pd.Series(False, index=np.arange(len(df)))
 
     freq_min = sampling_minutes or infer_sampling_minutes(work.iloc[:, 0])
     full_time = pd.date_range(work.iloc[0, 0], work.iloc[-1, 0], freq=f"{freq_min}min")
@@ -401,6 +439,8 @@ class BridgeSHMUnsupervisedPreprocessor:
             end = start + self.window_size
             windows.append(x[start:end].reshape(-1))
             spans.append((start, end))
+        if len(windows) == 0:
+            return np.empty((0, x.shape[1] * self.window_size), dtype=np.float32), []
         return np.array(windows, dtype=np.float32), spans
 
     def _prepare_model_input(
@@ -438,6 +478,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         windows, spans = self._make_windows(x_input)
         if len(windows) == 0:
             raise ValueError("样本长度小于 window_size，无法构造滑动窗口。")
+        _ = spans
         input_dim = windows.shape[1]
 
         self.model = MaskedDenoisingAutoencoder(input_dim=input_dim, latent_dim=self.latent_dim).to(self.device)
@@ -454,7 +495,9 @@ class BridgeSHMUnsupervisedPreprocessor:
                 batch = batch.to(self.device)
                 noise = 0.02 * torch.randn_like(batch)
                 mask = (torch.rand_like(batch) > self.mask_ratio).float()
-                masked_batch = batch * mask + noise
+
+                # 仅对被遮蔽部分注入噪声，避免未遮蔽部分也被整体污染
+                masked_batch = batch * mask + noise * (1.0 - mask)
 
                 recon, z = self.model(masked_batch)
 
@@ -462,7 +505,7 @@ class BridgeSHMUnsupervisedPreprocessor:
                 aug = batch + 0.01 * torch.randn_like(batch)
                 _, z_aug = self.model(aug)
                 loss_con = torch.mean((z - z_aug) ** 2)
-                loss_latent = torch.mean(z[:, 1:] ** 2) if z.shape[1] > 1 else torch.mean(z ** 2)
+                loss_latent = torch.mean(z ** 2)
 
                 loss = loss_rec + 0.15 * loss_con + 0.001 * loss_latent
                 optimizer.zero_grad()
@@ -490,6 +533,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         latent_point_score = dummy_score / np.clip(counts, 1, None)
         threshold = infer_threshold_gmm(latent_point_score)
 
+        aligned_time, _ = infer_time_column(aligned_df)
         self.artifacts = FitArtifacts(
             median=median,
             iqr=iqr,
@@ -501,7 +545,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             sensor_names=sensor_names,
             threshold=threshold,
             training_loss_history=loss_history,
-            sampling_minutes=infer_sampling_minutes(pd.to_datetime(aligned_df.iloc[:, 0], errors="coerce")),
+            sampling_minutes=infer_sampling_minutes(pd.to_datetime(aligned_time, errors="coerce")),
         )
         return self
 
@@ -514,6 +558,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         timestamps, _ = infer_time_column(aligned_df)
         if len(timestamps) != len(sensor_df):
             timestamps = pd.Series(np.arange(len(sensor_df)))
+
         known_event_mask = build_known_event_mask(timestamps)
         startup_mask = build_startup_mask(timestamps)
 
@@ -525,6 +570,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         x_trend, _, _, x_input = self._prepare_model_input(x_scaled, self.artifacts.adjacency)
 
         windows, spans = self._make_windows(x_input)
+        if len(windows) == 0:
+            raise ValueError("transform 输入长度小于 window_size，无法构造滑动窗口。")
+
         recon_windows, latent = self._encode_windows(windows)
 
         recon_full = np.zeros_like(x_input)
@@ -584,15 +632,19 @@ class BridgeSHMUnsupervisedPreprocessor:
         system_gap_mask = np.repeat(inserted_gap_rows.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
         bridge_wide_missing = np.repeat((raw_missing.mean(axis=1) >= 0.8).reshape(-1, 1), x_scaled.shape[1], axis=1)
         known_event_2d = np.repeat(known_event_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1)
+
         labels[raw_missing & (~bridge_wide_missing)] = "device_gap"
         labels[(raw_missing & bridge_wide_missing) | system_gap_mask] = "bridge_wide_gap"
-        labels[known_event_2d & (labels == "bridge_wide_gap")] = "known_system_gap"
+
+        # 已知窗口中的缺失统一归为 known_system_gap
+        labels[known_event_2d & (raw_missing | system_gap_mask | bridge_wide_missing)] = "known_system_gap"
 
         first_diff = np.abs(np.diff(x_scaled, axis=0, prepend=x_scaled[[0], :]))
         diff_thr = np.nanpercentile(first_diff, 95)
         spike_mask = (total_score > tau) & (first_diff > diff_thr)
         startup_jump_mask = np.repeat(startup_mask.to_numpy().reshape(-1, 1), x_scaled.shape[1], axis=1) & spike_mask
         step_mask = (first_diff > np.nanpercentile(first_diff, 98)) & (total_score > tau * 0.8)
+
         labels[spike_mask & (~raw_missing) & (labels == "normal")] = "spike"
         labels[startup_jump_mask & (~raw_missing)] = "startup_jump"
         labels[step_mask & (~startup_jump_mask) & (~raw_missing) & (labels == "normal")] = "step_change"
@@ -611,6 +663,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             )
             bias_thr = np.nanpercentile(np.abs(bias), 90)
             drift_labels[:, j] = (np.abs(bias) > bias_thr) & (sign_consistency > 0.8) & (total_score[:, j] > tau * 0.8)
+
         labels[drift_labels & (~raw_missing) & (labels == "normal")] = "drift"
 
         stuck_labels = np.zeros_like(x_scaled, dtype=bool)
@@ -619,6 +672,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             thr = np.nanpercentile(rs, 10)
             flat = rs <= max(thr, 1e-4)
             stuck_labels[:, j] = flat & (total_score[:, j] > tau * 0.6)
+
         labels[stuck_labels & (~raw_missing) & (labels == "normal")] = "stuck"
 
         labels[(total_score > tau) & (labels == "normal")] = "cross_sensor_conflict"
@@ -663,9 +717,12 @@ class BridgeSHMUnsupervisedPreprocessor:
             device_health, availability, project_score, dominant_issue, c = calc_health_scores(sensor_labels)
             bridge_event_counter.update(c)
             sensor_id, sensor_type = split_sensor_name(col)
-            missing_ratio = (c.get("device_gap", 0) + c.get("bridge_wide_gap", 0) + c.get("known_system_gap", 0)) / max(1, len(sensor_labels))
+            missing_ratio = (
+                c.get("device_gap", 0) + c.get("bridge_wide_gap", 0) + c.get("known_system_gap", 0)
+            ) / max(1, len(sensor_labels))
             health_rows.append(
                 {
+                    "sensor_name": col,
                     "bridge_name": "single_bridge",
                     "sensor_id": sensor_id,
                     "sensor_type": sensor_type,
@@ -692,6 +749,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         total_points = max(1, raw_missing.size)
         system_missing = bridge_event_counter.get("known_system_gap", 0) + bridge_event_counter.get("bridge_wide_gap", 0)
         device_missing = bridge_event_counter.get("device_gap", 0)
+
         bridge_metrics_df = pd.DataFrame(
             [
                 {
@@ -707,17 +765,25 @@ class BridgeSHMUnsupervisedPreprocessor:
                 }
             ]
         )
+
+        # 这里更诚实地命名：这些都是“按传感器点累计”的数量/时长
         bridge_event_df = pd.DataFrame(
             [
                 {
                     "bridge_name": "single_bridge",
-                    "startup_jump_count": int(bridge_event_counter.get("startup_jump", 0)),
-                    "known_system_gap_hours": round(bridge_event_counter.get("known_system_gap", 0) * self.artifacts.sampling_minutes / 60.0, 2),
-                    "device_gap_hours": round(device_missing * self.artifacts.sampling_minutes / 60.0, 2),
-                    "stuck_events": int(bridge_event_counter.get("stuck", 0)),
-                    "drift_events": int(bridge_event_counter.get("drift", 0)),
-                    "step_events": int(bridge_event_counter.get("step_change", 0)),
-                    "spike_events": int(bridge_event_counter.get("spike", 0) + bridge_event_counter.get("noise", 0)),
+                    "startup_jump_point_count": int(bridge_event_counter.get("startup_jump", 0)),
+                    "known_system_gap_sensor_hours": round(
+                        bridge_event_counter.get("known_system_gap", 0) * self.artifacts.sampling_minutes / 60.0, 2
+                    ),
+                    "device_gap_sensor_hours": round(
+                        device_missing * self.artifacts.sampling_minutes / 60.0, 2
+                    ),
+                    "stuck_point_count": int(bridge_event_counter.get("stuck", 0)),
+                    "drift_point_count": int(bridge_event_counter.get("drift", 0)),
+                    "step_change_point_count": int(bridge_event_counter.get("step_change", 0)),
+                    "spike_noise_point_count": int(
+                        bridge_event_counter.get("spike", 0) + bridge_event_counter.get("noise", 0)
+                    ),
                 }
             ]
         )
@@ -745,10 +811,15 @@ class BridgeSHMUnsupervisedPreprocessor:
         ensure_dir(output_dir)
         saved_paths: List[str] = []
 
-        timestamps, _ = infer_time_column(original_df)
-        if len(timestamps) != len(original_df):
-            timestamps = pd.Series(np.arange(len(original_df)))
-        sensor_df = original_df[self.artifacts.sensor_names].copy()
+        # 关键修复：可视化必须使用与 transform 同样规则补齐后的时间轴
+        aligned_original, _ = align_to_regular_timeline(
+            original_df, sampling_minutes=self.artifacts.sampling_minutes
+        )
+        timestamps, _ = infer_time_column(aligned_original)
+        if len(timestamps) != len(aligned_original):
+            timestamps = pd.Series(np.arange(len(aligned_original)))
+
+        sensor_df = aligned_original[self.artifacts.sensor_names].copy()
         cleaned_df = outputs["cleaned_data"].copy()
         score_df = outputs["score_data"].copy()
         label_df = outputs["label_data"].copy()
@@ -793,7 +864,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 4) 传感器健康指数条形图
         worst_health = health_df.nsmallest(min(12, len(health_df)), "project_score")
         fig, ax = plt.subplots(figsize=(8.0, max(4.0, 0.35 * len(worst_health) + 1.2)))
-        sensor_name = worst_health["sensor_id"] + "|" + worst_health["sensor_type"]
+        sensor_name = worst_health["sensor_name"]
         ax.barh(sensor_name, worst_health["project_score"])
         ax.invert_yaxis()
         ax.set_title("Worst Sensor Project Score")
@@ -816,42 +887,51 @@ class BridgeSHMUnsupervisedPreprocessor:
         ax2.set_ylabel("Mean Score")
         save_and_track(fig, "abnormal_count_over_time.png")
 
-        # 6) 原始-清洗对比图（挑选最差的若干传感器）
-        top_sensors = [f"{sid}_{st}" for sid, st in zip(health_df["sensor_id"], health_df["sensor_type"])]
-        top_sensors = top_sensors[: min(plot_top_k, len(top_sensors))]
+        # 6) 原始-清洗对比图
+        top_sensors = health_df["sensor_name"].head(min(plot_top_k, len(health_df))).tolist()
         nrows = len(top_sensors)
+        if nrows == 0:
+            return saved_paths
+
         fig, axes = plt.subplots(nrows=nrows, ncols=1, figsize=(12, max(3.2 * nrows, 3.5)), sharex=True)
         if nrows == 1:
             axes = [axes]
 
         label_colors = {
             "device_gap": "black",
+            "bridge_wide_gap": "gray",
+            "known_system_gap": "steelblue",
             "spike": "red",
+            "noise": "pink",
             "drift": "orange",
             "stuck": "purple",
+            "step_change": "green",
+            "startup_jump": "cyan",
             "cross_sensor_conflict": "brown",
         }
+
+        ts_array = np.array(timestamps)
 
         for ax, sensor in zip(axes, top_sensors):
             raw_series = sensor_df[sensor].to_numpy(dtype=float)
             cleaned_series = cleaned_df[sensor].to_numpy(dtype=float)
-            labels = label_df[sensor].astype(str).to_numpy()
+            sensor_labels = label_df[sensor].astype(str).to_numpy()
 
             ax.plot(timestamps, raw_series, linewidth=1.0, alpha=0.75, label="Raw")
             ax.plot(timestamps, cleaned_series, linewidth=1.6, alpha=0.95, label="Cleaned")
 
             for lb, color in label_colors.items():
-                mask = labels == lb
+                mask = sensor_labels == lb
                 if np.any(mask):
-                    ax.scatter(np.array(timestamps)[mask], cleaned_series[mask], s=14, c=color, label=lb, alpha=0.85)
+                    ax.scatter(ts_array[mask], cleaned_series[mask], s=14, c=color, label=lb, alpha=0.85)
 
             ax.set_title(f"{sensor}: Raw vs Cleaned")
             ax.set_ylabel("Value")
             ax.grid(alpha=0.22)
 
         style_time_axis(axes[-1], timestamps)
-        handles, labels = axes[0].get_legend_handles_labels()
-        uniq = dict(zip(labels, handles))
+        handles, labels_ = axes[0].get_legend_handles_labels()
+        uniq = dict(zip(labels_, handles))
         axes[0].legend(uniq.values(), uniq.keys(), ncol=min(6, len(uniq)), fontsize=8, loc="upper right")
         axes[-1].set_xlabel("Time")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
@@ -862,6 +942,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         x_scaled = (x_interp - self.artifacts.median) / self.artifacts.iqr
         _, _, _, x_input = self._prepare_model_input(x_scaled, self.artifacts.adjacency)
         windows, spans = self._make_windows(x_input)
+        if len(windows) == 0:
+            return saved_paths
+
         _, latent = self._encode_windows(windows)
 
         if latent.shape[1] > 2:
@@ -945,8 +1028,7 @@ def read_input(csv_path: str) -> pd.DataFrame:
     if df.shape[1] > 1:
         first_col = df.columns[0]
         try:
-            parsed = pd.to_datetime(df[first_col])
-            df[first_col] = parsed.astype(str)
+            df[first_col] = pd.to_datetime(df[first_col], errors="ignore")
         except Exception:
             pass
     return df
