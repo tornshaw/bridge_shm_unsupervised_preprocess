@@ -1,0 +1,14 @@
+﻿bridge,bridge_name,startup_jump_point_count,known_system_gap_sensor_hours,device_gap_sensor_hours,stuck_point_count,drift_point_count,step_change_point_count,spike_noise_point_count
+outputs,single_bridge,2,9531.17,3052.83,0,0,0,0
+outputs,single_bridge,0,6355.5,2088.33,0,1,8,0
+outputs,single_bridge,4,7009.0,1594.5,0,2,0,0
+outputs,single_bridge,0,7595.83,3171.17,0,0,1,1
+outputs,single_bridge,2,4961.33,1227.17,0,0,0,0
+outputs,single_bridge,0,4188.83,816.0,0,4,5,0
+outputs,single_bridge,3,21907.83,7334.67,0,0,0,0
+outputs,single_bridge,0,5098.5,2629.83,0,1,1,0
+outputs,single_bridge,1,5136.33,1220.17,0,0,0,0
+outputs,single_bridge,1,5053.33,1240.83,0,2,2,0
+outputs,single_bridge,0,47465.0,12684.33,0,0,4,0
+outputs,single_bridge,2,39878.67,10723.83,0,0,0,0
+outputs,single_bridge,4,6381.5,4115.33,0,0,0,0
