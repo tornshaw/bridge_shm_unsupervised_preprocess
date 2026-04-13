@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -43,6 +44,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.dates as mdates
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -371,6 +373,95 @@ class FitArtifacts:
 # -----------------------------
 # 主类
 # -----------------------------
+def sanitize_bridge_name(name: Optional[str]) -> str:
+    if name is None:
+        return "single_bridge"
+    s = str(name).strip()
+    if not s:
+        return "single_bridge"
+    return s
+
+
+def infer_bridge_name_from_path(path: Optional[str]) -> str:
+    if not path:
+        return "single_bridge"
+    base = os.path.basename(path)
+    stem, _ = os.path.splitext(base)
+    stem = re.sub(r"_(\d{8})_(\d{8})$", "", stem)
+    return sanitize_bridge_name(stem)
+
+
+def print_chinese_anomaly_summary(outputs: Dict[str, pd.DataFrame], top_k: int = 8) -> None:
+    label_df = outputs.get("label_data")
+    health_df = outputs.get("sensor_health_summary")
+    metrics_df = outputs.get("bridge_test_metrics")
+    event_df = outputs.get("bridge_event_summary")
+    if label_df is None or health_df is None or metrics_df is None or event_df is None:
+        return
+
+    bridge_name = str(metrics_df.iloc[0].get("bridge_name", "single_bridge")) if len(metrics_df) else "single_bridge"
+
+    label_cols = [c for c in label_df.columns if c != "timestamp"]
+    counter: Counter = Counter()
+    for c in label_cols:
+        counter.update(label_df[c].astype(str).tolist())
+    total_points = sum(counter.values())
+    abnormal_points = total_points - counter.get("normal", 0)
+    abnormal_ratio = abnormal_points / max(1, total_points)
+
+    zh_map = {
+        "normal": "正常",
+        "device_gap": "设备缺测",
+        "bridge_wide_gap": "全桥缺测",
+        "known_system_gap": "系统已知离线",
+        "spike": "突刺",
+        "noise": "噪声",
+        "drift": "漂移",
+        "stuck": "卡滞",
+        "step_change": "阶跃",
+        "startup_jump": "启动跳变",
+        "cross_sensor_conflict": "跨传感器冲突",
+    }
+
+    print(f"\n========== 桥梁异常结果摘要（{bridge_name}） ==========")
+    print(f"总点数：{total_points}，异常点数：{abnormal_points}，异常占比：{abnormal_ratio:.2%}")
+    print("异常类型统计（中文）：")
+    for key, cnt in counter.most_common():
+        if key == "normal":
+            continue
+        print(f"  - {zh_map.get(key, key)} ({key})：{cnt}")
+
+    if len(health_df) > 0 and "sensor_name" in health_df.columns and "project_score" in health_df.columns:
+        print(f"风险最高 Top{min(top_k, len(health_df))} 传感器：")
+        worst = health_df.nsmallest(min(top_k, len(health_df)), "project_score")
+        for _, row in worst.iterrows():
+            dom = str(row.get("dominant_issue", "normal"))
+            print(
+                f"  - {row.get('sensor_name', '')}: 综合分={row.get('project_score', 0):.2f}, "
+                f"主导问题={zh_map.get(dom, dom)}"
+            )
+
+    if len(event_df) > 0:
+        erow = event_df.iloc[0].to_dict()
+        print("事件级统计（便于报告阅读）：")
+        print(
+            "  - 启动跳变点数={startup}，系统缺测传感器小时={sys_h}，设备缺测传感器小时={dev_h}".format(
+                startup=erow.get("startup_jump_point_count", 0),
+                sys_h=erow.get("known_system_gap_sensor_hours", 0),
+                dev_h=erow.get("device_gap_sensor_hours", 0),
+            )
+        )
+        print(
+            "  - 卡滞点数={stuck}，漂移点数={drift}，阶跃点数={step}，突刺/噪声点数={spike}".format(
+                stuck=erow.get("stuck_point_count", 0),
+                drift=erow.get("drift_point_count", 0),
+                step=erow.get("step_change_point_count", 0),
+                spike=erow.get("spike_noise_point_count", 0),
+            )
+        )
+    print("======================================================\n")
+
+
 class BridgeSHMUnsupervisedPreprocessor:
     def __init__(
         self,
@@ -549,10 +640,11 @@ class BridgeSHMUnsupervisedPreprocessor:
         )
         return self
 
-    def transform(self, df: pd.DataFrame) -> Dict[str, pd.DataFrame]:
+    def transform(self, df: pd.DataFrame, bridge_name: str = "single_bridge") -> Dict[str, pd.DataFrame]:
         if self.model is None or self.artifacts is None:
             raise RuntimeError("请先调用 fit()")
 
+        bridge_name = sanitize_bridge_name(bridge_name)
         aligned_df, inserted_gap_rows = align_to_regular_timeline(df, sampling_minutes=self.artifacts.sampling_minutes)
         sensor_df = aligned_df[self.artifacts.sensor_names].copy()
         timestamps, _ = infer_time_column(aligned_df)
@@ -723,7 +815,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             health_rows.append(
                 {
                     "sensor_name": col,
-                    "bridge_name": "single_bridge",
+                    "bridge_name": bridge_name,
                     "sensor_id": sensor_id,
                     "sensor_type": sensor_type,
                     "device_health": round(device_health, 3),
@@ -753,7 +845,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         bridge_metrics_df = pd.DataFrame(
             [
                 {
-                    "bridge_name": "single_bridge",
+                    "bridge_name": bridge_name,
                     "samples": len(sensor_df),
                     "sensor_count": len(self.artifacts.sensor_names),
                     "total_missing_ratio": round((system_missing + device_missing) / total_points, 4),
@@ -770,7 +862,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         bridge_event_df = pd.DataFrame(
             [
                 {
-                    "bridge_name": "single_bridge",
+                    "bridge_name": bridge_name,
                     "startup_jump_point_count": int(bridge_event_counter.get("startup_jump", 0)),
                     "known_system_gap_sensor_hours": round(
                         bridge_event_counter.get("known_system_gap", 0) * self.artifacts.sampling_minutes / 60.0, 2
@@ -840,24 +932,46 @@ class BridgeSHMUnsupervisedPreprocessor:
         ax.grid(alpha=0.25)
         save_and_track(fig, "training_loss_curve.png")
 
-        # 2) 邻接矩阵热力图
-        fig, ax = plt.subplots(figsize=(7.5, 6.2))
-        im = ax.imshow(self.artifacts.adjacency, aspect="auto")
+        # 2) 邻接矩阵热力图（增强对比度 + 高连接标注）
+        adj = np.asarray(self.artifacts.adjacency, dtype=float)
+        p_low, p_high = np.nanpercentile(adj, [5, 99])
+        if not np.isfinite(p_low):
+            p_low = float(np.nanmin(adj))
+        if not np.isfinite(p_high) or p_high <= p_low:
+            p_high = float(np.nanmax(adj) + 1e-6)
+
+        fig, ax = plt.subplots(figsize=(8.6, 7.2))
+        im = ax.imshow(adj, aspect="auto", cmap="magma", vmin=p_low, vmax=p_high)
         ax.set_title("Sensor Adjacency Heatmap")
         ax.set_xlabel("Sensor Index")
         ax.set_ylabel("Sensor Index")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        top_thr = float(np.nanpercentile(adj, 99.5))
+        idx = np.argwhere(adj >= top_thr)
+        if len(idx) > 0:
+            idx = idx[: min(80, len(idx))]
+            ax.scatter(idx[:, 1], idx[:, 0], s=10, c="cyan", alpha=0.6, label="Top edges")
+            ax.legend(loc="upper right", fontsize=8)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Adjacency Strength")
         save_and_track(fig, "sensor_adjacency_heatmap.png")
 
-        # 3) 异常评分热力图
+        # 3) 异常评分热力图（分位裁剪 + 等值线）
         score_values = score_df.drop(columns=["timestamp"]).to_numpy(dtype=float).T
-        fig, ax = plt.subplots(figsize=(11, 5.5))
-        im = ax.imshow(score_values, aspect="auto")
+        s_low, s_high = np.nanpercentile(score_values, [5, 99])
+        if not np.isfinite(s_low):
+            s_low = float(np.nanmin(score_values))
+        if not np.isfinite(s_high) or s_high <= s_low:
+            s_high = float(np.nanmax(score_values) + 1e-6)
+        fig, ax = plt.subplots(figsize=(12.5, 6.2))
+        im = ax.imshow(score_values, aspect="auto", cmap="turbo", vmin=s_low, vmax=s_high)
         ax.set_title("Anomaly Score Heatmap")
         ax.set_xlabel("Time Step")
         ax.set_ylabel("Sensor")
         ax.set_yticks(np.arange(len(self.artifacts.sensor_names)))
         ax.set_yticklabels(self.artifacts.sensor_names)
+        lv = np.nanpercentile(score_values, [90, 95, 99])
+        lv = np.unique(lv[np.isfinite(lv)])
+        if len(lv) > 0:
+            ax.contour(score_values, levels=lv, colors="white", linewidths=0.4, alpha=0.6)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Score")
         save_and_track(fig, "anomaly_score_heatmap.png")
 
@@ -936,7 +1050,130 @@ class BridgeSHMUnsupervisedPreprocessor:
         axes[-1].set_xlabel("Time")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 潜空间散点图
+        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
+        all_sensors = self.artifacts.sensor_names
+        n_all = len(all_sensors)
+        if n_all > 0:
+            fig_h = max(9.0, 1.15 * n_all + 4.8)
+            fig = plt.figure(figsize=(16, fig_h))
+            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
+            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
+            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
+            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
+
+            time_num = mdates.date2num(pd.to_datetime(timestamps))
+            if np.any(np.isfinite(time_num)):
+                xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
+            else:
+                xmin, xmax = 0.0, float(len(timestamps) - 1)
+                time_num = np.arange(len(timestamps), dtype=float)
+
+            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
+            for i, sensor in enumerate(all_sensors):
+                raw_series = sensor_df[sensor].to_numpy(dtype=float)
+                clean_series = cleaned_df[sensor].to_numpy(dtype=float)
+                ax = top_axes[i]
+                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
+                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
+                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
+                ax.grid(True, axis="y", alpha=0.12)
+                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
+                for sp in ax.spines.values():
+                    sp.set_linewidth(0.9)
+                if i < n_all - 1:
+                    ax.tick_params(axis="x", labelbottom=False)
+                if i == 0:
+                    ax.set_title("All-channel Time Series (one panel per sensor, Raw/Cleaned)")
+                    ax.legend(loc="upper right", fontsize=7, ncol=2)
+
+            # (b) 底图：离散异常状态矩阵
+            label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
+            status_order = [
+                "normal",
+                "device_gap",
+                "bridge_wide_gap",
+                "known_system_gap",
+                "spike",
+                "noise",
+                "drift",
+                "stuck",
+                "step_change",
+                "startup_jump",
+                "cross_sensor_conflict",
+            ]
+            status_colors = {
+                "normal": "#6DBE45",
+                "device_gap": "#F5F5F5",
+                "bridge_wide_gap": "#E8E8E8",
+                "known_system_gap": "#D5EEF7",
+                "spike": "#FF1A1A",
+                "noise": "#69B9C9",
+                "drift": "#3E59A8",
+                "stuck": "#B455A0",
+                "step_change": "#F39C12",
+                "startup_jump": "#8E44AD",
+                "cross_sensor_conflict": "#7F8C8D",
+            }
+            status_zh = {
+                "normal": "正常",
+                "device_gap": "设备缺测",
+                "bridge_wide_gap": "全桥缺测",
+                "known_system_gap": "已知系统离线",
+                "spike": "突刺",
+                "noise": "噪声",
+                "drift": "漂移",
+                "stuck": "卡滞",
+                "step_change": "阶跃",
+                "startup_jump": "启动跳变",
+                "cross_sensor_conflict": "跨传感器冲突",
+            }
+            status_to_code = {s: i for i, s in enumerate(status_order)}
+            S = np.vectorize(lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"]))(label_matrix)
+
+            cmap = mcolors.ListedColormap([status_colors[s] for s in status_order])
+            norm = mcolors.BoundaryNorm(np.arange(-0.5, len(status_order) + 0.5, 1), cmap.N)
+            ax_bottom.imshow(
+                S,
+                aspect="auto",
+                interpolation="nearest",
+                cmap=cmap,
+                norm=norm,
+                extent=[xmin, xmax, 0.5, n_all + 0.5],
+                origin="lower",
+            )
+            ax_bottom.set_yticks(np.arange(1, n_all + 1))
+            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
+            ax_bottom.set_ylabel("Sensor")
+            ax_bottom.set_title("Sensor Status Matrix")
+            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
+            for sp in ax_bottom.spines.values():
+                sp.set_linewidth(1.0)
+
+            handles = [
+                plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
+                for s in status_order
+            ]
+            ax_bottom.legend(
+                handles=handles,
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.22),
+                ncol=4,
+                frameon=True,
+                fontsize=8,
+                columnspacing=0.8,
+                handlelength=1.8,
+            )
+
+            style_time_axis(top_axes[-1], timestamps)
+            style_time_axis(ax_bottom, timestamps)
+            top_axes[-1].set_xlim(xmin, xmax)
+            ax_bottom.set_xlabel("Time")
+            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
+            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+
+            save_and_track(fig, "all_channels_status_overview.png")
+
+        # 8) 潜空间散点图
         x_raw = sensor_df.to_numpy(dtype=float)
         x_interp = pd.DataFrame(x_raw).interpolate(limit_direction="both").bfill().ffill().to_numpy()
         x_scaled = (x_interp - self.artifacts.median) / self.artifacts.iqr
@@ -1053,9 +1290,11 @@ def main() -> None:
 
     if args.demo or args.input_csv is None:
         df, pos_df = make_demo_data()
+        bridge_name = "demo_bridge"
     else:
         df = read_input(args.input_csv)
         pos_df = pd.read_csv(args.positions_csv) if args.positions_csv else None
+        bridge_name = infer_bridge_name_from_path(args.input_csv)
 
     pre = BridgeSHMUnsupervisedPreprocessor(
         window_size=args.window_size,
@@ -1064,7 +1303,8 @@ def main() -> None:
         epochs=args.epochs,
     )
     pre.fit(df, positions=pos_df)
-    outputs = pre.transform(df)
+    outputs = pre.transform(df, bridge_name=bridge_name)
+    print_chinese_anomaly_summary(outputs)
 
     for name, out_df in outputs.items():
         out_path = os.path.join(args.output_dir, f"{name}.csv")
