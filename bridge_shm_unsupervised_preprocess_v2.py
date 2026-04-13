@@ -44,6 +44,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.dates as mdates
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -1049,50 +1050,137 @@ class BridgeSHMUnsupervisedPreprocessor:
         axes[-1].set_xlabel("Time")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 全通道时程图 + 异常掩码图（同尺寸，便于对照截图）
+        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
         if n_all > 0:
-            fig_h = max(5.0, 1.2 * n_all)
-            fig_ts, axes_ts = plt.subplots(nrows=n_all, ncols=1, figsize=(14, fig_h), sharex=True)
-            fig_mask, axes_mask = plt.subplots(nrows=n_all, ncols=1, figsize=(14, fig_h), sharex=True)
-            if n_all == 1:
-                axes_ts = [axes_ts]
-                axes_mask = [axes_mask]
+            fig_h = max(7.0, 0.48 * n_all + 6.0)
+            fig = plt.figure(figsize=(16, fig_h))
+            gs = fig.add_gridspec(2, 1, height_ratios=[1.25, 1.0], hspace=0.18)
+            ax_top = fig.add_subplot(gs[0])
+            ax_bottom = fig.add_subplot(gs[1], sharex=ax_top)
 
+            time_num = mdates.date2num(pd.to_datetime(timestamps))
+            if np.any(np.isfinite(time_num)):
+                xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
+            else:
+                xmin, xmax = 0.0, float(len(timestamps) - 1)
+                time_num = np.arange(len(timestamps), dtype=float)
+
+            # (a) 顶图：所有通道堆叠时程，统一做稳健归一化，便于同图阅读
+            offset = 1.35
+            yticks = []
+            ylabels = []
             for i, sensor in enumerate(all_sensors):
                 raw_series = sensor_df[sensor].to_numpy(dtype=float)
-                cleaned_series = cleaned_df[sensor].to_numpy(dtype=float)
-                abnormal_mask = (label_df[sensor].astype(str).to_numpy() != "normal")
+                clean_series = cleaned_df[sensor].to_numpy(dtype=float)
+                med = np.nanmedian(clean_series)
+                q25 = np.nanpercentile(clean_series, 25)
+                q75 = np.nanpercentile(clean_series, 75)
+                scale = max(q75 - q25, 1e-6)
+                raw_norm = (raw_series - med) / scale
+                clean_norm = (clean_series - med) / scale
+                y0 = i * offset
+                ax_top.plot_date(time_num, raw_norm + y0, "-", lw=0.55, alpha=0.35, color="#4c72b0")
+                ax_top.plot_date(time_num, clean_norm + y0, "-", lw=0.8, alpha=0.9, color="#2f2f2f")
+                yticks.append(y0)
+                ylabels.append(sensor)
 
-                ax_t = axes_ts[i]
-                ax_t.plot(timestamps, raw_series, linewidth=0.7, alpha=0.45, color="#4c72b0", label="Raw")
-                ax_t.plot(timestamps, cleaned_series, linewidth=0.85, alpha=0.9, color="#dd8452", label="Cleaned")
-                ax_t.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=8)
-                ax_t.grid(alpha=0.18)
-                if i == 0:
-                    ax_t.set_title("All-channel Time Series (Raw vs Cleaned)")
-                    ax_t.legend(loc="upper right", fontsize=8, ncol=2)
+            ax_top.set_yticks(yticks)
+            ax_top.set_yticklabels(ylabels, fontsize=7)
+            ax_top.set_ylabel("Sensor")
+            ax_top.set_title("All-channel Time Series (Raw/Cleaned, Robust-normalized)")
+            ax_top.grid(True, axis="x", alpha=0.24, linestyle="--")
+            ax_top.grid(True, axis="y", alpha=0.13)
+            for sp in ax_top.spines.values():
+                sp.set_linewidth(1.0)
 
-                ax_m = axes_mask[i]
-                ymin = np.nanmin(cleaned_series) if np.any(np.isfinite(cleaned_series)) else -1.0
-                ymax = np.nanmax(cleaned_series) if np.any(np.isfinite(cleaned_series)) else 1.0
-                if ymax - ymin < 1e-8:
-                    ymax = ymin + 1.0
-                ax_m.fill_between(timestamps, ymin, ymax, where=~abnormal_mask, color="#7bc96f", alpha=0.35, step="mid")
-                ax_m.fill_between(timestamps, ymin, ymax, where=abnormal_mask, color="#e15759", alpha=0.55, step="mid")
-                ax_m.plot(timestamps, cleaned_series, linewidth=0.6, color="black", alpha=0.75)
-                ax_m.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=8)
-                ax_m.grid(alpha=0.15)
-                if i == 0:
-                    ax_m.set_title("All-channel Normal/Abnormal Mask")
+            # (b) 底图：离散异常状态矩阵
+            label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
+            status_order = [
+                "normal",
+                "device_gap",
+                "bridge_wide_gap",
+                "known_system_gap",
+                "spike",
+                "noise",
+                "drift",
+                "stuck",
+                "step_change",
+                "startup_jump",
+                "cross_sensor_conflict",
+            ]
+            status_colors = {
+                "normal": "#6DBE45",
+                "device_gap": "#F5F5F5",
+                "bridge_wide_gap": "#E8E8E8",
+                "known_system_gap": "#D5EEF7",
+                "spike": "#FF1A1A",
+                "noise": "#69B9C9",
+                "drift": "#3E59A8",
+                "stuck": "#B455A0",
+                "step_change": "#F39C12",
+                "startup_jump": "#8E44AD",
+                "cross_sensor_conflict": "#7F8C8D",
+            }
+            status_zh = {
+                "normal": "正常",
+                "device_gap": "设备缺测",
+                "bridge_wide_gap": "全桥缺测",
+                "known_system_gap": "已知系统离线",
+                "spike": "突刺",
+                "noise": "噪声",
+                "drift": "漂移",
+                "stuck": "卡滞",
+                "step_change": "阶跃",
+                "startup_jump": "启动跳变",
+                "cross_sensor_conflict": "跨传感器冲突",
+            }
+            status_to_code = {s: i for i, s in enumerate(status_order)}
+            S = np.vectorize(lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"]))(label_matrix)
 
-            style_time_axis(axes_ts[-1], timestamps)
-            style_time_axis(axes_mask[-1], timestamps)
-            axes_ts[-1].set_xlabel("Time")
-            axes_mask[-1].set_xlabel("Time")
-            save_and_track(fig_ts, "all_channels_timeseries.png")
-            save_and_track(fig_mask, "all_channels_normal_abnormal_mask.png")
+            cmap = mcolors.ListedColormap([status_colors[s] for s in status_order])
+            norm = mcolors.BoundaryNorm(np.arange(-0.5, len(status_order) + 0.5, 1), cmap.N)
+            ax_bottom.imshow(
+                S,
+                aspect="auto",
+                interpolation="nearest",
+                cmap=cmap,
+                norm=norm,
+                extent=[xmin, xmax, 0.5, n_all + 0.5],
+                origin="lower",
+            )
+            ax_bottom.set_yticks(np.arange(1, n_all + 1))
+            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
+            ax_bottom.set_ylabel("Sensor")
+            ax_bottom.set_title("Sensor Status Matrix")
+            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
+            for sp in ax_bottom.spines.values():
+                sp.set_linewidth(1.0)
+
+            handles = [
+                plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
+                for s in status_order
+            ]
+            ax_bottom.legend(
+                handles=handles,
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.26),
+                ncol=4,
+                frameon=True,
+                fontsize=8,
+                columnspacing=0.8,
+                handlelength=1.8,
+            )
+
+            style_time_axis(ax_top, timestamps)
+            style_time_axis(ax_bottom, timestamps)
+            ax_top.set_xlim(xmin, xmax)
+            ax_bottom.set_xlabel("Time")
+            ax_top.text(-0.06, -0.12, "(a)", transform=ax_top.transAxes, fontsize=12, fontweight="bold")
+            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+
+            save_and_track(fig, "all_channels_status_overview.png")
 
         # 8) 潜空间散点图
         x_raw = sensor_df.to_numpy(dtype=float)
