@@ -1050,44 +1050,125 @@ class BridgeSHMUnsupervisedPreprocessor:
         axes[-1].set_xlabel("Time")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
+        # 7) 全通道时程图 + 异常状态矩阵（优化版）
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
+
         if n_all > 0:
-            fig_h = max(9.0, 1.15 * n_all + 4.8)
-            fig = plt.figure(figsize=(16, fig_h))
-            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
-            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
-            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
-            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
+            # -----------------------------
+            # 画布与布局
+            # 顶图/底图横向完全一致
+            # 底图纵向高度提升约一半
+            # -----------------------------
+            fig_h = max(10.0, 0.56 * n_all + 6.2)
 
-            time_num = mdates.date2num(pd.to_datetime(timestamps))
-            if np.any(np.isfinite(time_num)):
+            fig = plt.figure(figsize=(16, fig_h), constrained_layout=False)
+            gs = fig.add_gridspec(
+                2, 1,
+                height_ratios=[max(2.8, n_all * 0.34), max(2.7, n_all * 0.24)],
+                hspace=0.06
+            )
+
+            ax_top = fig.add_subplot(gs[0])
+            ax_bottom = fig.add_subplot(gs[1], sharex=ax_top)
+
+            # 统一左右边距，保证上下图绘图区宽度一致
+            fig.subplots_adjust(left=0.12, right=0.985, top=0.94, bottom=0.08)
+
+            # =========================
+            # 时间轴
+            # =========================
+            time_dt = pd.to_datetime(timestamps, errors="coerce")
+
+            if time_dt.notna().any():
+                time_num = mdates.date2num(time_dt)
                 xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
+                use_datetime_axis = True
             else:
-                xmin, xmax = 0.0, float(len(timestamps) - 1)
                 time_num = np.arange(len(timestamps), dtype=float)
+                xmin, xmax = 0.0, float(len(timestamps) - 1)
+                use_datetime_axis = False
 
-            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
+            # =========================
+            # 顶图归一化函数：缩放到 [-1, 1]
+            # 用分位数裁剪，避免极端 spike 压缩整体显示
+            # =========================
+            def normalize_to_minus1_1(x, q_low=1, q_high=99):
+                x = np.asarray(x, dtype=float)
+                out = np.full_like(x, np.nan, dtype=float)
+
+                mask = np.isfinite(x)
+                if mask.sum() == 0:
+                    return out
+
+                xv = x[mask]
+                lo, hi = np.nanpercentile(xv, [q_low, q_high])
+
+                # 常数序列或极小波动
+                if (not np.isfinite(lo)) or (not np.isfinite(hi)) or abs(hi - lo) < 1e-12:
+                    out[mask] = 0.0
+                    return out
+
+                xv = np.clip(xv, lo, hi)
+                out[mask] = 2.0 * (xv - lo) / (hi - lo) - 1.0
+                return out
+
+            # =========================
+            # (a) 顶图：单轴分层错位绘制
+            # 只保留实际曲线（蓝色实线）
+            # 通道间用黑色虚线隔开
+            # =========================
+            row_gap = 2.5
+            amp = 0.82
+            y_centers = np.arange(n_all) * row_gap + 1.0
+
             for i, sensor in enumerate(all_sensors):
-                raw_series = sensor_df[sensor].to_numpy(dtype=float)
                 clean_series = cleaned_df[sensor].to_numpy(dtype=float)
-                ax = top_axes[i]
-                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
-                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
-                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
-                ax.grid(True, axis="y", alpha=0.12)
-                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
-                for sp in ax.spines.values():
-                    sp.set_linewidth(0.9)
-                if i < n_all - 1:
-                    ax.tick_params(axis="x", labelbottom=False)
-                if i == 0:
-                    ax.set_title("All-channel Time Series (one panel per sensor, Raw/Cleaned)")
-                    ax.legend(loc="upper right", fontsize=7, ncol=2)
+                clean_norm = normalize_to_minus1_1(clean_series)
 
+                y0 = y_centers[i]
+
+                # 蓝色实线：实际曲线
+                ax_top.plot(
+                    time_num,
+                    y0 + amp * clean_norm,
+                    lw=1.0,
+                    alpha=0.95,
+                    color="#1D4ED8",
+                    linestyle="-",
+                    zorder=2
+                )
+
+                # 黑色虚线：通道分隔线
+                ax_top.axhline(
+                    y=y0,
+                    color="black",
+                    lw=0.65,
+                    linestyle="--",
+                    alpha=0.75,
+                    zorder=0
+                )
+
+            ax_top.set_xlim(xmin, xmax)
+            ax_top.set_ylim(y_centers[0] - 1.15, y_centers[-1] + 1.15)
+            ax_top.set_yticks(y_centers)
+            ax_top.set_yticklabels(all_sensors, fontsize=8)
+            ax_top.set_ylabel("Sensor", fontsize=9)
+            ax_top.set_title("All-channel Time Series (normalized to [-1, 1])", fontsize=13, pad=8)
+
+            # 只保留 x 方向网格
+            ax_top.grid(True, axis="x", alpha=0.22, linestyle="--", linewidth=0.6)
+            ax_top.tick_params(axis="x", labelbottom=False)
+            ax_top.tick_params(axis="y", length=0)
+
+            for sp in ax_top.spines.values():
+                sp.set_linewidth(0.9)
+
+            # =========================
             # (b) 底图：离散异常状态矩阵
+            # =========================
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
+
             status_order = [
                 "normal",
                 "device_gap",
@@ -1101,6 +1182,7 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump",
                 "cross_sensor_conflict",
             ]
+
             status_colors = {
                 "normal": "#6DBE45",
                 "device_gap": "#F5F5F5",
@@ -1114,6 +1196,7 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump": "#8E44AD",
                 "cross_sensor_conflict": "#7F8C8D",
             }
+
             status_zh = {
                 "normal": "正常",
                 "device_gap": "设备缺测",
@@ -1127,11 +1210,15 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump": "启动跳变",
                 "cross_sensor_conflict": "跨传感器冲突",
             }
+
             status_to_code = {s: i for i, s in enumerate(status_order)}
-            S = np.vectorize(lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"]))(label_matrix)
+            S = np.vectorize(
+                lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"])
+            )(label_matrix)
 
             cmap = mcolors.ListedColormap([status_colors[s] for s in status_order])
             norm = mcolors.BoundaryNorm(np.arange(-0.5, len(status_order) + 0.5, 1), cmap.N)
+
             ax_bottom.imshow(
                 S,
                 aspect="auto",
@@ -1141,35 +1228,59 @@ class BridgeSHMUnsupervisedPreprocessor:
                 extent=[xmin, xmax, 0.5, n_all + 0.5],
                 origin="lower",
             )
+
+            ax_bottom.set_xlim(xmin, xmax)
             ax_bottom.set_yticks(np.arange(1, n_all + 1))
-            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
-            ax_bottom.set_ylabel("Sensor")
-            ax_bottom.set_title("Sensor Status Matrix")
-            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
+            ax_bottom.set_yticklabels(all_sensors, fontsize=8)
+            ax_bottom.set_ylabel("Sensor", fontsize=9)
+            ax_bottom.set_title("Sensor Status Matrix", fontsize=13, pad=8)
+
+            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--", linewidth=0.6)
+
+            # 底图横向分隔线
+            for y in np.arange(1.5, n_all + 0.5, 1.0):
+                ax_bottom.axhline(y, color="k", lw=0.4, alpha=0.45)
+
+            ax_bottom.tick_params(axis="y", length=0)
+            ax_bottom.tick_params(axis="x", labelsize=8)
+
             for sp in ax_bottom.spines.values():
-                sp.set_linewidth(1.0)
+                sp.set_linewidth(0.9)
 
             handles = [
-                plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
+                plt.Line2D([0], [0], color=status_colors[s], lw=8, label=f"{status_zh[s]} ({s})")
                 for s in status_order
             ]
             ax_bottom.legend(
                 handles=handles,
-                loc="upper left",
-                bbox_to_anchor=(0.0, 1.22),
-                ncol=4,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.02),   # 水平居中
+                ncol=min(6, len(handles)),    # 每行最多6个
                 frameon=True,
                 fontsize=8,
-                columnspacing=0.8,
-                handlelength=1.8,
+                columnspacing=1.0,
+                handlelength=2.2,
+                borderpad=0.6,
+                alignment="center"            # ⭐ 关键：多行也居中
             )
 
-            style_time_axis(top_axes[-1], timestamps)
-            style_time_axis(ax_bottom, timestamps)
-            top_axes[-1].set_xlim(xmin, xmax)
-            ax_bottom.set_xlabel("Time")
-            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
-            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+            # =========================
+            # 时间轴格式
+            # =========================
+            if use_datetime_axis:
+                locator = mdates.AutoDateLocator(minticks=6, maxticks=10)
+                formatter = mdates.ConciseDateFormatter(locator)
+
+                ax_top.xaxis.set_major_locator(locator)
+                ax_top.xaxis.set_major_formatter(formatter)
+                ax_bottom.xaxis.set_major_locator(locator)
+                ax_bottom.xaxis.set_major_formatter(formatter)
+
+            ax_bottom.set_xlabel("Time", fontsize=10)
+
+            # 子图编号
+            ax_top.text(-0.08, 1.04, "(a)", transform=ax_top.transAxes, fontsize=12, fontweight="bold")
+            ax_bottom.text(-0.08, -0.22, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
 
             save_and_track(fig, "all_channels_status_overview.png")
 
