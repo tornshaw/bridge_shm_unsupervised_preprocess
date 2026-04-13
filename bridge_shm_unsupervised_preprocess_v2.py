@@ -1054,11 +1054,12 @@ class BridgeSHMUnsupervisedPreprocessor:
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
         if n_all > 0:
-            fig_h = max(7.0, 0.48 * n_all + 6.0)
+            fig_h = max(9.0, 1.15 * n_all + 4.8)
             fig = plt.figure(figsize=(16, fig_h))
-            gs = fig.add_gridspec(2, 1, height_ratios=[1.25, 1.0], hspace=0.18)
-            ax_top = fig.add_subplot(gs[0])
-            ax_bottom = fig.add_subplot(gs[1], sharex=ax_top)
+            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
+            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
+            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
+            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
 
             time_num = mdates.date2num(pd.to_datetime(timestamps))
             if np.any(np.isfinite(time_num)):
@@ -1067,33 +1068,23 @@ class BridgeSHMUnsupervisedPreprocessor:
                 xmin, xmax = 0.0, float(len(timestamps) - 1)
                 time_num = np.arange(len(timestamps), dtype=float)
 
-            # (a) 顶图：所有通道堆叠时程，统一做稳健归一化，便于同图阅读
-            offset = 1.35
-            yticks = []
-            ylabels = []
+            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
             for i, sensor in enumerate(all_sensors):
                 raw_series = sensor_df[sensor].to_numpy(dtype=float)
                 clean_series = cleaned_df[sensor].to_numpy(dtype=float)
-                med = np.nanmedian(clean_series)
-                q25 = np.nanpercentile(clean_series, 25)
-                q75 = np.nanpercentile(clean_series, 75)
-                scale = max(q75 - q25, 1e-6)
-                raw_norm = (raw_series - med) / scale
-                clean_norm = (clean_series - med) / scale
-                y0 = i * offset
-                ax_top.plot_date(time_num, raw_norm + y0, "-", lw=0.55, alpha=0.35, color="#4c72b0")
-                ax_top.plot_date(time_num, clean_norm + y0, "-", lw=0.8, alpha=0.9, color="#2f2f2f")
-                yticks.append(y0)
-                ylabels.append(sensor)
-
-            ax_top.set_yticks(yticks)
-            ax_top.set_yticklabels(ylabels, fontsize=7)
-            ax_top.set_ylabel("Sensor")
-            ax_top.set_title("All-channel Time Series (Raw/Cleaned, Robust-normalized)")
-            ax_top.grid(True, axis="x", alpha=0.24, linestyle="--")
-            ax_top.grid(True, axis="y", alpha=0.13)
-            for sp in ax_top.spines.values():
-                sp.set_linewidth(1.0)
+                ax = top_axes[i]
+                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
+                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
+                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
+                ax.grid(True, axis="y", alpha=0.12)
+                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
+                for sp in ax.spines.values():
+                    sp.set_linewidth(0.9)
+                if i < n_all - 1:
+                    ax.tick_params(axis="x", labelbottom=False)
+                if i == 0:
+                    ax.set_title("All-channel Time Series (one panel per sensor, Raw/Cleaned)")
+                    ax.legend(loc="upper right", fontsize=7, ncol=2)
 
             # (b) 底图：离散异常状态矩阵
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
@@ -1165,7 +1156,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_bottom.legend(
                 handles=handles,
                 loc="upper left",
-                bbox_to_anchor=(0.0, 1.26),
+                bbox_to_anchor=(0.0, 1.22),
                 ncol=4,
                 frameon=True,
                 fontsize=8,
@@ -1173,11 +1164,11 @@ class BridgeSHMUnsupervisedPreprocessor:
                 handlelength=1.8,
             )
 
-            style_time_axis(ax_top, timestamps)
+            style_time_axis(top_axes[-1], timestamps)
             style_time_axis(ax_bottom, timestamps)
-            ax_top.set_xlim(xmin, xmax)
+            top_axes[-1].set_xlim(xmin, xmax)
             ax_bottom.set_xlabel("Time")
-            ax_top.text(-0.06, -0.12, "(a)", transform=ax_top.transAxes, fontsize=12, fontweight="bold")
+            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
             ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
 
             save_and_track(fig, "all_channels_status_overview.png")
