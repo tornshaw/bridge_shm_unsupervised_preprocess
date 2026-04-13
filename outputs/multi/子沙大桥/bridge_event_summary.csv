@@ -1,0 +1,2 @@
+﻿bridge_name,startup_jump_point_count,known_system_gap_sensor_hours,device_gap_sensor_hours,stuck_point_count,drift_point_count,step_change_point_count,spike_noise_point_count
+single_bridge,0,6355.5,2088.33,0,1,8,0
