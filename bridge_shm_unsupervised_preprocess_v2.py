@@ -56,6 +56,10 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "FangSong", "DejaVu Sans"]
+plt.rcParams["axes.unicode_minus"] = False
+
 
 KNOWN_IOT_START = dt.datetime(2026, 1, 25)
 KNOWN_IOT_END = dt.datetime(2026, 2, 5, 23, 59, 59)
@@ -247,6 +251,58 @@ def infer_sampling_minutes(time_axis: pd.Series, fallback: int = 10) -> int:
     if deltas.empty:
         return fallback
     return int(max(1, round(float(deltas.median()))))
+
+
+def maybe_resample_daily_for_viz(
+    timestamps: pd.Series,
+    sensor_df: pd.DataFrame,
+    cleaned_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    label_df: pd.DataFrame,
+    point_status_df: pd.DataFrame,
+) -> Tuple[pd.Series, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """若时间轴是 datetime，则将可视化数据按 1 天聚合。"""
+    if not pd.api.types.is_datetime64_any_dtype(timestamps):
+        return timestamps, sensor_df, cleaned_df, score_df, label_df, point_status_df
+
+    ts = pd.to_datetime(timestamps, errors="coerce")
+    if ts.notna().sum() < 2:
+        return timestamps, sensor_df, cleaned_df, score_df, label_df, point_status_df
+
+    idx = pd.DatetimeIndex(ts)
+    raw_daily = sensor_df.copy()
+    raw_daily.index = idx
+    raw_daily = raw_daily.resample("1D").mean()
+
+    clean_daily = cleaned_df.copy()
+    clean_daily.index = idx
+    clean_daily = clean_daily.resample("1D").mean()
+
+    score_vals = score_df.drop(columns=["timestamp"]).copy()
+    score_vals.index = idx
+    score_daily = score_vals.resample("1D").mean()
+    score_daily.insert(0, "timestamp", score_daily.index)
+
+    label_vals = label_df.drop(columns=["timestamp"]).copy().astype(str)
+    label_vals.index = idx
+    label_daily = label_vals.resample("1D").apply(
+        lambda x: x.value_counts().idxmax() if len(x) else "normal"
+    )
+    label_daily.insert(0, "timestamp", label_daily.index)
+
+    point_daily = point_status_df.copy()
+    point_daily.index = idx
+    agg_cols = {
+        "abnormal_count": "mean",
+        "point_score_mean": "mean",
+        "point_score_max": "max",
+    }
+    point_daily = point_daily.resample("1D").agg(agg_cols)
+    point_daily["point_status"] = np.where(point_daily["abnormal_count"] > 0, "abnormal", "normal")
+    point_daily.insert(0, "timestamp", point_daily.index)
+
+    out_ts = pd.Series(raw_daily.index)
+    return out_ts, raw_daily.reset_index(drop=True), clean_daily.reset_index(drop=True), score_daily, label_daily, point_daily
 
 
 def align_to_regular_timeline(df: pd.DataFrame, sampling_minutes: Optional[int] = None) -> Tuple[pd.DataFrame, pd.Series]:
@@ -918,6 +974,16 @@ class BridgeSHMUnsupervisedPreprocessor:
         health_df = outputs["sensor_health_summary"].copy()
         point_status_df = outputs["point_status"].copy()
 
+        timestamps, sensor_df, cleaned_sensor_df, score_df, label_df, point_status_df = maybe_resample_daily_for_viz(
+            timestamps=timestamps,
+            sensor_df=sensor_df,
+            cleaned_df=cleaned_df.drop(columns=["timestamp"]).copy(),
+            score_df=score_df,
+            label_df=label_df,
+            point_status_df=point_status_df,
+        )
+        cleaned_df = cleaned_sensor_df.copy()
+
         def save_and_track(fig: plt.Figure, filename: str) -> None:
             path = os.path.join(output_dir, filename)
             save_figure(fig, path)
@@ -926,7 +992,7 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 1) 训练损失曲线
         fig, ax = plt.subplots(figsize=(7.2, 4.2))
         ax.plot(np.arange(1, len(self.artifacts.training_loss_history) + 1), self.artifacts.training_loss_history, linewidth=2.0)
-        ax.set_title("Training Loss Curve")
+        ax.set_title("训练损失曲线 Training Loss")
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
         ax.grid(alpha=0.25)
@@ -942,9 +1008,9 @@ class BridgeSHMUnsupervisedPreprocessor:
 
         fig, ax = plt.subplots(figsize=(8.6, 7.2))
         im = ax.imshow(adj, aspect="auto", cmap="magma", vmin=p_low, vmax=p_high)
-        ax.set_title("Sensor Adjacency Heatmap")
-        ax.set_xlabel("Sensor Index")
-        ax.set_ylabel("Sensor Index")
+        ax.set_title("传感器邻接热力图 Sensor Adjacency")
+        ax.set_xlabel("传感器索引")
+        ax.set_ylabel("传感器索引")
         top_thr = float(np.nanpercentile(adj, 99.5))
         idx = np.argwhere(adj >= top_thr)
         if len(idx) > 0:
@@ -963,9 +1029,9 @@ class BridgeSHMUnsupervisedPreprocessor:
             s_high = float(np.nanmax(score_values) + 1e-6)
         fig, ax = plt.subplots(figsize=(12.5, 6.2))
         im = ax.imshow(score_values, aspect="auto", cmap="turbo", vmin=s_low, vmax=s_high)
-        ax.set_title("Anomaly Score Heatmap")
-        ax.set_xlabel("Time Step")
-        ax.set_ylabel("Sensor")
+        ax.set_title("异常分数热力图 Anomaly Score")
+        ax.set_xlabel("时间")
+        ax.set_ylabel("传感器")
         ax.set_yticks(np.arange(len(self.artifacts.sensor_names)))
         ax.set_yticklabels(self.artifacts.sensor_names)
         lv = np.nanpercentile(score_values, [90, 95, 99])
@@ -981,8 +1047,8 @@ class BridgeSHMUnsupervisedPreprocessor:
         sensor_name = worst_health["sensor_name"]
         ax.barh(sensor_name, worst_health["project_score"])
         ax.invert_yaxis()
-        ax.set_title("Worst Sensor Project Score")
-        ax.set_xlabel("Project Score")
+        ax.set_title("风险最高传感器（综合分最低）")
+        ax.set_xlabel("综合分 Project Score")
         ax.set_xlim(0, 100)
         ax.grid(axis="x", alpha=0.25)
         save_and_track(fig, "sensor_health_barh.png")
@@ -990,15 +1056,15 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 5) 逐时刻异常计数曲线
         fig, ax1 = plt.subplots(figsize=(11, 4.8))
         ax1.plot(timestamps, point_status_df["abnormal_count"], linewidth=1.8, label="Abnormal count")
-        ax1.set_title("Abnormal Count Over Time")
-        ax1.set_xlabel("Time")
-        ax1.set_ylabel("Abnormal Sensor Count")
+        ax1.set_title("每日异常通道数量")
+        ax1.set_xlabel("时间")
+        ax1.set_ylabel("异常传感器数")
         ax1.grid(alpha=0.25)
         style_time_axis(ax1, timestamps)
 
         ax2 = ax1.twinx()
         ax2.plot(timestamps, point_status_df["point_score_mean"], linestyle="--", linewidth=1.4, label="Mean score")
-        ax2.set_ylabel("Mean Score")
+        ax2.set_ylabel("平均异常分")
         save_and_track(fig, "abnormal_count_over_time.png")
 
         # 6) 原始-清洗对比图
@@ -1039,136 +1105,55 @@ class BridgeSHMUnsupervisedPreprocessor:
                 if np.any(mask):
                     ax.scatter(ts_array[mask], cleaned_series[mask], s=14, c=color, label=lb, alpha=0.85)
 
-            ax.set_title(f"{sensor}: Raw vs Cleaned")
-            ax.set_ylabel("Value")
+            ax.set_title(f"{sensor}: 原始值 vs 修复值")
+            ax.set_ylabel("数值")
             ax.grid(alpha=0.22)
 
         style_time_axis(axes[-1], timestamps)
         handles, labels_ = axes[0].get_legend_handles_labels()
         uniq = dict(zip(labels_, handles))
         axes[0].legend(uniq.values(), uniq.keys(), ncol=min(6, len(uniq)), fontsize=8, loc="upper right")
-        axes[-1].set_xlabel("Time")
+        axes[-1].set_xlabel("时间")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 全通道时程图 + 异常状态矩阵（优化版）
+        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
-
         if n_all > 0:
-            # -----------------------------
-            # 画布与布局
-            # 顶图/底图横向完全一致
-            # 底图纵向高度提升约一半
-            # -----------------------------
-            fig_h = max(10.0, 0.56 * n_all + 6.2)
+            fig_h = max(9.0, 1.15 * n_all + 4.8)
+            fig = plt.figure(figsize=(16, fig_h))
+            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
+            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
+            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
+            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
 
-            fig = plt.figure(figsize=(16, fig_h), constrained_layout=False)
-            gs = fig.add_gridspec(
-                2, 1,
-                height_ratios=[max(2.8, n_all * 0.34), max(2.7, n_all * 0.24)],
-                hspace=0.06
-            )
-
-            ax_top = fig.add_subplot(gs[0])
-            ax_bottom = fig.add_subplot(gs[1], sharex=ax_top)
-
-            # 统一左右边距，保证上下图绘图区宽度一致
-            fig.subplots_adjust(left=0.12, right=0.985, top=0.94, bottom=0.08)
-
-            # =========================
-            # 时间轴
-            # =========================
-            time_dt = pd.to_datetime(timestamps, errors="coerce")
-
-            if time_dt.notna().any():
-                time_num = mdates.date2num(time_dt)
+            time_num = mdates.date2num(pd.to_datetime(timestamps))
+            if np.any(np.isfinite(time_num)):
                 xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
-                use_datetime_axis = True
             else:
-                time_num = np.arange(len(timestamps), dtype=float)
                 xmin, xmax = 0.0, float(len(timestamps) - 1)
-                use_datetime_axis = False
+                time_num = np.arange(len(timestamps), dtype=float)
 
-            # =========================
-            # 顶图归一化函数：缩放到 [-1, 1]
-            # 用分位数裁剪，避免极端 spike 压缩整体显示
-            # =========================
-            def normalize_to_minus1_1(x, q_low=1, q_high=99):
-                x = np.asarray(x, dtype=float)
-                out = np.full_like(x, np.nan, dtype=float)
-
-                mask = np.isfinite(x)
-                if mask.sum() == 0:
-                    return out
-
-                xv = x[mask]
-                lo, hi = np.nanpercentile(xv, [q_low, q_high])
-
-                # 常数序列或极小波动
-                if (not np.isfinite(lo)) or (not np.isfinite(hi)) or abs(hi - lo) < 1e-12:
-                    out[mask] = 0.0
-                    return out
-
-                xv = np.clip(xv, lo, hi)
-                out[mask] = 2.0 * (xv - lo) / (hi - lo) - 1.0
-                return out
-
-            # =========================
-            # (a) 顶图：单轴分层错位绘制
-            # 只保留实际曲线（蓝色实线）
-            # 通道间用黑色虚线隔开
-            # =========================
-            row_gap = 2.5
-            amp = 0.82
-            y_centers = np.arange(n_all) * row_gap + 1.0
-
+            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
             for i, sensor in enumerate(all_sensors):
+                raw_series = sensor_df[sensor].to_numpy(dtype=float)
                 clean_series = cleaned_df[sensor].to_numpy(dtype=float)
-                clean_norm = normalize_to_minus1_1(clean_series)
+                ax = top_axes[i]
+                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
+                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
+                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
+                ax.grid(True, axis="y", alpha=0.12)
+                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
+                for sp in ax.spines.values():
+                    sp.set_linewidth(0.9)
+                if i < n_all - 1:
+                    ax.tick_params(axis="x", labelbottom=False)
+                if i == 0:
+                    ax.set_title("全通道时程（按通道分子图）Raw/Cleaned")
+                    ax.legend(loc="upper right", fontsize=7, ncol=2)
 
-                y0 = y_centers[i]
-
-                # 蓝色实线：实际曲线
-                ax_top.plot(
-                    time_num,
-                    y0 + amp * clean_norm,
-                    lw=1.0,
-                    alpha=0.95,
-                    color="#1D4ED8",
-                    linestyle="-",
-                    zorder=2
-                )
-
-                # 黑色虚线：通道分隔线
-                ax_top.axhline(
-                    y=y0,
-                    color="black",
-                    lw=0.65,
-                    linestyle="--",
-                    alpha=0.75,
-                    zorder=0
-                )
-
-            ax_top.set_xlim(xmin, xmax)
-            ax_top.set_ylim(y_centers[0] - 1.15, y_centers[-1] + 1.15)
-            ax_top.set_yticks(y_centers)
-            ax_top.set_yticklabels(all_sensors, fontsize=8)
-            ax_top.set_ylabel("Sensor", fontsize=9)
-            ax_top.set_title("All-channel Time Series (normalized to [-1, 1])", fontsize=13, pad=8)
-
-            # 只保留 x 方向网格
-            ax_top.grid(True, axis="x", alpha=0.22, linestyle="--", linewidth=0.6)
-            ax_top.tick_params(axis="x", labelbottom=False)
-            ax_top.tick_params(axis="y", length=0)
-
-            for sp in ax_top.spines.values():
-                sp.set_linewidth(0.9)
-
-            # =========================
             # (b) 底图：离散异常状态矩阵
-            # =========================
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
-
             status_order = [
                 "normal",
                 "device_gap",
@@ -1182,7 +1167,6 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump",
                 "cross_sensor_conflict",
             ]
-
             status_colors = {
                 "normal": "#6DBE45",
                 "device_gap": "#F5F5F5",
@@ -1196,7 +1180,6 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump": "#8E44AD",
                 "cross_sensor_conflict": "#7F8C8D",
             }
-
             status_zh = {
                 "normal": "正常",
                 "device_gap": "设备缺测",
@@ -1210,15 +1193,11 @@ class BridgeSHMUnsupervisedPreprocessor:
                 "startup_jump": "启动跳变",
                 "cross_sensor_conflict": "跨传感器冲突",
             }
-
             status_to_code = {s: i for i, s in enumerate(status_order)}
-            S = np.vectorize(
-                lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"])
-            )(label_matrix)
+            S = np.vectorize(lambda x: status_to_code.get(str(x), status_to_code["cross_sensor_conflict"]))(label_matrix)
 
             cmap = mcolors.ListedColormap([status_colors[s] for s in status_order])
             norm = mcolors.BoundaryNorm(np.arange(-0.5, len(status_order) + 0.5, 1), cmap.N)
-
             ax_bottom.imshow(
                 S,
                 aspect="auto",
@@ -1228,59 +1207,35 @@ class BridgeSHMUnsupervisedPreprocessor:
                 extent=[xmin, xmax, 0.5, n_all + 0.5],
                 origin="lower",
             )
-
-            ax_bottom.set_xlim(xmin, xmax)
             ax_bottom.set_yticks(np.arange(1, n_all + 1))
-            ax_bottom.set_yticklabels(all_sensors, fontsize=8)
-            ax_bottom.set_ylabel("Sensor", fontsize=9)
-            ax_bottom.set_title("Sensor Status Matrix", fontsize=13, pad=8)
-
-            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--", linewidth=0.6)
-
-            # 底图横向分隔线
-            for y in np.arange(1.5, n_all + 0.5, 1.0):
-                ax_bottom.axhline(y, color="k", lw=0.4, alpha=0.45)
-
-            ax_bottom.tick_params(axis="y", length=0)
-            ax_bottom.tick_params(axis="x", labelsize=8)
-
+            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
+            ax_bottom.set_ylabel("传感器")
+            ax_bottom.set_title("异常状态矩阵 Sensor Status")
+            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
             for sp in ax_bottom.spines.values():
-                sp.set_linewidth(0.9)
+                sp.set_linewidth(1.0)
 
             handles = [
-                plt.Line2D([0], [0], color=status_colors[s], lw=8, label=f"{status_zh[s]} ({s})")
+                plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
                 for s in status_order
             ]
             ax_bottom.legend(
                 handles=handles,
-                loc="upper center",
-                bbox_to_anchor=(0.5, 1.02),   # 水平居中
-                ncol=min(6, len(handles)),    # 每行最多6个
+                loc="upper left",
+                bbox_to_anchor=(0.0, 1.22),
+                ncol=4,
                 frameon=True,
                 fontsize=8,
-                columnspacing=1.0,
-                handlelength=2.2,
-                borderpad=0.6,
-                alignment="center"            # ⭐ 关键：多行也居中
+                columnspacing=0.8,
+                handlelength=1.8,
             )
 
-            # =========================
-            # 时间轴格式
-            # =========================
-            if use_datetime_axis:
-                locator = mdates.AutoDateLocator(minticks=6, maxticks=10)
-                formatter = mdates.ConciseDateFormatter(locator)
-
-                ax_top.xaxis.set_major_locator(locator)
-                ax_top.xaxis.set_major_formatter(formatter)
-                ax_bottom.xaxis.set_major_locator(locator)
-                ax_bottom.xaxis.set_major_formatter(formatter)
-
-            ax_bottom.set_xlabel("Time", fontsize=10)
-
-            # 子图编号
-            ax_top.text(-0.08, 1.04, "(a)", transform=ax_top.transAxes, fontsize=12, fontweight="bold")
-            ax_bottom.text(-0.08, -0.22, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+            style_time_axis(top_axes[-1], timestamps)
+            style_time_axis(ax_bottom, timestamps)
+            top_axes[-1].set_xlim(xmin, xmax)
+            ax_bottom.set_xlabel("时间")
+            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
+            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
 
             save_and_track(fig, "all_channels_status_overview.png")
 
@@ -1390,6 +1345,7 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="使用内置模拟数据演示")
     parser.add_argument("--window_size", type=int, default=12, help="滑动窗口长度")
     parser.add_argument("--stride", type=int, default=1, help="滑动步长")
+    parser.add_argument("--sample_days", type=float, default=1.0, help="异常检测单样本窗口天数，默认 1d")
     parser.add_argument("--epochs", type=int, default=60, help="训练轮数")
     parser.add_argument("--latent_dim", type=int, default=32, help="潜变量维数")
     parser.add_argument("--plot_top_k", type=int, default=4, help="原始/清洗对比图中展示的传感器数量")
@@ -1407,8 +1363,20 @@ def main() -> None:
         pos_df = pd.read_csv(args.positions_csv) if args.positions_csv else None
         bridge_name = infer_bridge_name_from_path(args.input_csv)
 
+    time_axis, has_dt = infer_time_column(df)
+    if has_dt:
+        sampling_minutes_est = infer_sampling_minutes(pd.to_datetime(time_axis, errors="coerce"))
+        window_size_1d = int(max(4, round(24 * 60 * args.sample_days / max(1, sampling_minutes_est))))
+        window_size_used = window_size_1d
+        print(
+            f"检测窗口按 {args.sample_days}d 设置：采样间隔≈{sampling_minutes_est} 分钟，window_size={window_size_used}"
+        )
+    else:
+        window_size_used = args.window_size
+        print(f"未识别到时间列，沿用窗口长度 window_size={window_size_used}")
+
     pre = BridgeSHMUnsupervisedPreprocessor(
-        window_size=args.window_size,
+        window_size=window_size_used,
         stride=args.stride,
         latent_dim=args.latent_dim,
         epochs=args.epochs,
