@@ -1,0 +1,2 @@
+﻿bridge_name,samples,sensor_count,total_missing_ratio,system_missing_ratio,device_missing_ratio,avg_device_health,avg_availability,bridge_project_score
+single_bridge,11260,70,0.2656,0.2098,0.0558,87.716,78.164,84.85
