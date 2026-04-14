@@ -7,7 +7,6 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from .app_service import build_offline_tasks, run_multi_bridge_tasks
 from .online_data import (
     fetch_bridge_data_with_export_script,
     find_mapping_file,
@@ -217,6 +216,16 @@ class BridgeApp(tk.Tk):
         os.makedirs(output_root, exist_ok=True)
 
         try:
+            try:
+                from .app_service import build_offline_tasks, run_multi_bridge_tasks
+            except ModuleNotFoundError as dep_err:
+                missing = str(dep_err)
+                if "torch" in missing:
+                    raise RuntimeError(
+                        "检测到运行依赖缺失：torch。请在打包环境安装 torch，或在 PyInstaller 中显式收集 torch 依赖。"
+                    ) from dep_err
+                raise
+
             if self.source_mode.get() == "offline":
                 selected_files = [self.offline_csvs[i] for i in selected_idx]
                 tasks = build_offline_tasks(selected_files, self.bridge_sensor_select)

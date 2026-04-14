@@ -10,11 +10,25 @@ pip install pyinstaller pandas numpy matplotlib scikit-learn torch openpyxl
 
 ## 2. 打包命令
 
+推荐直接使用仓库内一键脚本：
+
+```bat
+build_windows_exe.bat
+```
+
+也可手动执行：
+
 ```bash
 pyinstaller --noconfirm --clean --windowed \
+  --collect-all torch \
+  --collect-all sklearn \
+  --hidden-import torch \
+  --hidden-import torch._C \
   --name "桥梁健康监测系统传感器健康状态无监督可视化分析软件" \
   run_gui_app.py
 ```
+
+> 如果仍提示 `No module named 'torch'`，请确认**打包用的 Python 环境**已安装 torch，并在该环境重新执行上面的命令。
 
 ## 3. 运行
 
