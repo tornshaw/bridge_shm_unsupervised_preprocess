@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import glob
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
@@ -49,6 +50,10 @@ class BridgeApp(tk.Tk):
         self.bridge_items: List[Dict[str, str]] = []
         self.selected_bridge_indices: List[int] = []
         self.current_bridge_name: Optional[str] = None
+        self.tree_to_bridge: Dict[str, str] = {}
+        self.result_images: List[str] = []
+        self.result_image_index: int = 0
+        self.result_photo = None
 
         self._build_ui()
 
@@ -120,30 +125,40 @@ class BridgeApp(tk.Tk):
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
 
-        left = ttk.LabelFrame(body, text="桥梁列表（多选）")
+        left = ttk.LabelFrame(body, text="桥梁-测点树（左）")
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
+        self.bridge_tree = ttk.Treeview(left, columns=("type",), show="tree", height=26, selectmode="extended")
+        self.bridge_tree.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.bridge_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
-        self.bridge_list = tk.Listbox(left, selectmode=tk.EXTENDED, width=42, height=24)
-        self.bridge_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-        self.bridge_list.bind("<<ListboxSelect>>", self._on_bridge_select)
+        mid = ttk.LabelFrame(body, text="传感器选择（当前桥）")
+        mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=8)
 
-        right = ttk.LabelFrame(body, text="传感器选择（当前桥）")
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10)
-
-        self.current_bridge_label = ttk.Label(right, text="当前桥: -")
+        self.current_bridge_label = ttk.Label(mid, text="当前桥: -")
         self.current_bridge_label.pack(anchor="w", padx=6, pady=4)
-        self.current_range_label = ttk.Label(right, text="当前数据时间范围: -")
+        self.current_range_label = ttk.Label(mid, text="当前数据时间范围: -")
         self.current_range_label.pack(anchor="w", padx=6, pady=2)
 
-        btn_bar = ttk.Frame(right)
+        btn_bar = ttk.Frame(mid)
         btn_bar.pack(fill=tk.X, padx=6, pady=4)
         ttk.Button(btn_bar, text="全选", command=self._select_all_sensors).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_bar, text="清空勾选", command=self._clear_sensors).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_bar, text="清除全部桥传感器选择", command=self._clear_all_sensor_selection).pack(side=tk.LEFT, padx=4)
         ttk.Button(btn_bar, text="保存当前桥传感器选择", command=self._save_sensor_selection).pack(side=tk.LEFT, padx=8)
 
-        self.sensor_list = tk.Listbox(right, selectmode=tk.MULTIPLE, width=70, height=22)
+        self.sensor_list = tk.Listbox(mid, selectmode=tk.MULTIPLE, width=38, height=22)
         self.sensor_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+
+        right = ttk.LabelFrame(body, text="分析图片（右）")
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6)
+        nav = ttk.Frame(right)
+        nav.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Button(nav, text="上一张", command=lambda: self._switch_image(-1)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(nav, text="下一张", command=lambda: self._switch_image(1)).pack(side=tk.LEFT, padx=4)
+        self.image_title = ttk.Label(nav, text="暂无图片")
+        self.image_title.pack(side=tk.LEFT, padx=8)
+        self.image_label = ttk.Label(right)
+        self.image_label.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
 
         run_bar = ttk.Frame(self)
         run_bar.pack(fill=tk.X, padx=10, pady=8)
@@ -151,8 +166,12 @@ class BridgeApp(tk.Tk):
         ttk.Button(run_bar, text="时空图+多置信融合分析", command=lambda: self._run("时空图+多置信融合分析")).pack(side=tk.RIGHT, padx=6)
         ttk.Button(run_bar, text="清除分析结果", command=self._clear_analysis_results).pack(side=tk.LEFT, padx=6)
 
-        self.result_text = tk.Text(self, height=7)
-        self.result_text.pack(fill=tk.BOTH, padx=10, pady=6)
+        bottom = ttk.LabelFrame(self, text="分析结果表格与日志（下）")
+        bottom.pack(fill=tk.BOTH, padx=10, pady=6)
+        self.summary_table = ttk.Treeview(bottom, show="headings", height=6)
+        self.summary_table.pack(fill=tk.X, padx=6, pady=4)
+        self.result_text = tk.Text(bottom, height=6)
+        self.result_text.pack(fill=tk.BOTH, padx=6, pady=4)
         self.result_text.insert(tk.END, "等待分析...\n")
         self.result_text.configure(state=tk.DISABLED)
         self._on_mode_change()
@@ -162,6 +181,51 @@ class BridgeApp(tk.Tk):
         self.result_text.delete("1.0", tk.END)
         self.result_text.insert(tk.END, text)
         self.result_text.configure(state=tk.DISABLED)
+
+    def _show_summary_table(self, summary: pd.DataFrame) -> None:
+        for c in self.summary_table["columns"]:
+            self.summary_table.heading(c, text="")
+        self.summary_table.delete(*self.summary_table.get_children())
+        if summary is None or summary.empty:
+            self.summary_table["columns"] = ()
+            return
+        cols = list(summary.columns)
+        self.summary_table["columns"] = cols
+        for c in cols:
+            self.summary_table.heading(c, text=c)
+            self.summary_table.column(c, width=120, anchor="center")
+        for _, row in summary.iterrows():
+            self.summary_table.insert("", tk.END, values=[row.get(c, "") for c in cols])
+
+    def _load_result_images(self, output_root: str, bridge_name: Optional[str] = None) -> None:
+        target_dir = output_root
+        if bridge_name:
+            cand = os.path.join(output_root, bridge_name)
+            if os.path.isdir(cand):
+                target_dir = cand
+        self.result_images = sorted(glob.glob(os.path.join(target_dir, "*.png")))
+        self.result_image_index = 0
+        self._render_current_image()
+
+    def _render_current_image(self) -> None:
+        if not self.result_images:
+            self.image_title.config(text="暂无图片")
+            self.image_label.config(image="", text="暂无图片")
+            self.result_photo = None
+            return
+        path = self.result_images[self.result_image_index]
+        self.image_title.config(text=os.path.basename(path))
+        try:
+            self.result_photo = tk.PhotoImage(file=path)
+            self.image_label.config(image=self.result_photo, text="")
+        except Exception:
+            self.image_label.config(image="", text=f"无法显示图片: {path}")
+
+    def _switch_image(self, step: int) -> None:
+        if not self.result_images:
+            return
+        self.result_image_index = (self.result_image_index + step) % len(self.result_images)
+        self._render_current_image()
 
     def _on_mode_change(self) -> None:
         offline = self.source_mode.get() == "offline"
@@ -227,6 +291,8 @@ class BridgeApp(tk.Tk):
         self.current_bridge_name = None
         self.current_bridge_label.config(text="当前桥: -")
         self.current_range_label.config(text="当前数据时间范围: -")
+        for item in self.bridge_tree.get_children():
+            self.bridge_tree.delete(item)
         self.sensor_list.delete(0, tk.END)
         self._refresh_bridge_list()
 
@@ -244,26 +310,55 @@ class BridgeApp(tk.Tk):
         return {"bridge_name": stem, "date_range": "-", "csv_path": path}
 
     def _refresh_bridge_list(self) -> None:
-        self.bridge_list.delete(0, tk.END)
+        for item in self.bridge_tree.get_children():
+            self.bridge_tree.delete(item)
         self.bridge_items = []
         self.selected_bridge_indices = []
+        self.tree_to_bridge = {}
         if self.source_mode.get() == "offline":
             for p in self.offline_csvs:
                 info = self._parse_offline_bridge_info(p)
                 self.bridge_items.append(info)
-                self.bridge_list.insert(tk.END, info["bridge_name"])
+                item_id = self.bridge_tree.insert("", tk.END, text=info["bridge_name"], open=True)
+                self.tree_to_bridge[item_id] = info["bridge_name"]
         else:
             for b in self.online_bridge_names:
                 self.bridge_items.append({"bridge_name": b, "date_range": "-", "csv_path": ""})
-                self.bridge_list.insert(tk.END, b)
+                item_id = self.bridge_tree.insert("", tk.END, text=b, open=True)
+                self.tree_to_bridge[item_id] = b
+        self._refresh_tree_sensors()
 
-    def _on_bridge_select(self, _event=None) -> None:
-        sel = self.bridge_list.curselection()
-        if not sel:
+    def _refresh_tree_sensors(self) -> None:
+        for node_id, bridge in list(self.tree_to_bridge.items()):
+            # 清理已有子节点
+            for ch in self.bridge_tree.get_children(node_id):
+                self.bridge_tree.delete(ch)
+            sensors = self.bridge_sensors_all.get(bridge)
+            if sensors is None:
+                sensors = self._load_sensors_for_bridge(bridge)
+                self.bridge_sensors_all[bridge] = sensors
+            for s in sensors:
+                self.bridge_tree.insert(node_id, tk.END, text=f"📍 {s}")
+
+    def _on_tree_select(self, _event=None) -> None:
+        sel_nodes = self.bridge_tree.selection()
+        roots = []
+        for node in sel_nodes:
+            root = node if self.bridge_tree.parent(node) == "" else self.bridge_tree.parent(node)
+            if root not in roots:
+                roots.append(root)
+        if not roots:
             return
-        self.selected_bridge_indices = list(sel)
-        idx = sel[0]
-        if idx >= len(self.bridge_items):
+        self.selected_bridge_indices = []
+        for rid in roots:
+            bridge = self.tree_to_bridge.get(rid)
+            if bridge:
+                idx = next((i for i, it in enumerate(self.bridge_items) if it["bridge_name"] == bridge), -1)
+                if idx >= 0:
+                    self.selected_bridge_indices.append(idx)
+
+        idx = self.selected_bridge_indices[0] if self.selected_bridge_indices else -1
+        if idx < 0 or idx >= len(self.bridge_items):
             return
         bridge = self.bridge_items[idx]["bridge_name"]
         self.current_bridge_name = bridge
@@ -318,6 +413,9 @@ class BridgeApp(tk.Tk):
         output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
         if os.path.exists(output_root):
             shutil.rmtree(output_root, ignore_errors=True)
+        self._show_summary_table(pd.DataFrame())
+        self.result_images = []
+        self._render_current_image()
         self._set_result("分析结果已清除。\n")
         messagebox.showinfo("成功", f"已清理输出目录: {output_root}")
 
@@ -332,9 +430,7 @@ class BridgeApp(tk.Tk):
             messagebox.showerror("参数错误", str(e))
             return
 
-        selected_idx = self.bridge_list.curselection()
-        if not selected_idx and self.selected_bridge_indices:
-            selected_idx = tuple(self.selected_bridge_indices)
+        selected_idx = tuple(self.selected_bridge_indices)
         if not selected_idx:
             messagebox.showwarning("提示", "请至少选择一座桥")
             return
@@ -354,6 +450,8 @@ class BridgeApp(tk.Tk):
                             selected_files.append(p)
                 tasks = build_offline_tasks(selected_files, self.bridge_sensor_select)
             else:
+                if ("成功" not in self.db_status_var.get()) and ("端口可达" not in self.db_status_var.get()):
+                    raise ValueError("在线模式请先测试数据库连接成功，再执行分析。")
                 export_script = self.export_script_var.get().strip()
                 tasks = []
                 for i in selected_idx:
@@ -367,6 +465,8 @@ class BridgeApp(tk.Tk):
                         export_script=export_script,
                     )
                     tasks.extend(build_offline_tasks([csv_out], self.bridge_sensor_select))
+            if not tasks:
+                raise ValueError("当前选择未生成可分析任务，请检查桥梁/数据加载状态。")
 
             summary = run_multi_bridge_tasks(
                 tasks=tasks,
@@ -382,6 +482,9 @@ class BridgeApp(tk.Tk):
             if show_cols:
                 result += summary[show_cols].to_string(index=False)
             self._set_result(result)
+            self._show_summary_table(summary)
+            first_bridge = summary.iloc[0]["bridge_name"] if not summary.empty and "bridge_name" in summary.columns else None
+            self._load_result_images(output_root=output_root, bridge_name=first_bridge)
             messagebox.showinfo("完成", f"分析完成。桥梁数={len(summary)}\n输出目录: {output_root}")
         except Exception as e:
             messagebox.showerror("分析失败", str(e))
