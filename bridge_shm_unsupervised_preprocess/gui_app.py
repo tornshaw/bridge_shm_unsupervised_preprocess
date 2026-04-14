@@ -62,6 +62,8 @@ class BridgeApp(tk.Tk):
         self.result_image_index: int = 0
         self.result_photo = None
         self.current_image_path: Optional[str] = None
+        self.node_checked: Dict[str, bool] = {}
+        self.node_raw_text: Dict[str, str] = {}
 
         self._build_ui()
 
@@ -155,6 +157,8 @@ class BridgeApp(tk.Tk):
         self.current_range_label = ttk.Label(mid, text="当前数据时间范围: -")
         self.current_range_label.pack(anchor="w", padx=6, pady=2)
         ttk.Label(mid, text="提示：在左侧树中可直接多选桥梁与测点。").pack(anchor="w", padx=6, pady=6)
+        self.selected_info_label = ttk.Label(mid, text="已选设备信息：暂无")
+        self.selected_info_label.pack(anchor="w", padx=6, pady=4)
 
         right = ttk.LabelFrame(body, text="分析图片（右）")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6)
@@ -170,6 +174,7 @@ class BridgeApp(tk.Tk):
         self.image_label = ttk.Label(right)
         self.image_label.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         self.image_label.bind("<Configure>", lambda _e: self._render_current_image())
+        self.bridge_tree.bind("<Button-1>", self._on_tree_click, add="+")
 
         bottom = ttk.LabelFrame(self, text="分析结果表格与日志（下）")
         bottom.pack(fill=tk.BOTH, padx=10, pady=6)
@@ -391,10 +396,15 @@ class BridgeApp(tk.Tk):
             self.bridge_tree.delete(item)
         self.selected_bridge_indices = []
         self.tree_to_bridge = {}
+        self.node_checked = {}
+        self.node_raw_text = {}
         for info in self.bridge_items:
-            item_id = self.bridge_tree.insert("", tk.END, text=info["bridge_name"], open=True)
+            item_id = self.bridge_tree.insert("", tk.END, text=f"☐ {info['bridge_name']}", open=True)
             self.tree_to_bridge[item_id] = info["bridge_name"]
+            self.node_raw_text[item_id] = info["bridge_name"]
+            self.node_checked[item_id] = False
         self._refresh_tree_sensors()
+        self._update_selected_info()
 
     def _refresh_bridge_list(self) -> None:
         self.bridge_items = []
@@ -417,7 +427,50 @@ class BridgeApp(tk.Tk):
                 sensors = self._load_sensors_for_bridge(bridge)
                 self.bridge_sensors_all[bridge] = sensors
             for s in sensors:
-                self.bridge_tree.insert(node_id, tk.END, text=f"📍 {s}")
+                ch = self.bridge_tree.insert(node_id, tk.END, text=f"☐ {s}")
+                self.node_raw_text[ch] = s
+                self.node_checked[ch] = False
+
+    def _set_node_checked(self, node: str, checked: bool) -> None:
+        self.node_checked[node] = checked
+        raw = self.node_raw_text.get(node, self.bridge_tree.item(node, "text").replace("☐", "").replace("☑", "").strip())
+        prefix = "☑" if checked else "☐"
+        self.bridge_tree.item(node, text=f"{prefix} {raw}")
+
+    def _on_tree_click(self, event) -> None:
+        node = self.bridge_tree.identify_row(event.y)
+        if not node:
+            return
+        checked = not self.node_checked.get(node, False)
+        self._set_node_checked(node, checked)
+        parent = self.bridge_tree.parent(node)
+        if parent == "":
+            for ch in self.bridge_tree.get_children(node):
+                self._set_node_checked(ch, checked)
+        else:
+            siblings = self.bridge_tree.get_children(parent)
+            all_checked = all(self.node_checked.get(ch, False) for ch in siblings)
+            self._set_node_checked(parent, all_checked)
+        self.bridge_tree.selection_set(node)
+        self._update_selected_info()
+
+    def _update_selected_info(self) -> None:
+        lines = []
+        total_bridges = 0
+        total_sensors = 0
+        for node, bridge in self.tree_to_bridge.items():
+            if not self.node_checked.get(node, False):
+                continue
+            total_bridges += 1
+            chs = self.bridge_tree.get_children(node)
+            n = sum(1 for ch in chs if self.node_checked.get(ch, False))
+            total_sensors += n
+            lines.append(f"{bridge}: {n} 个设备")
+        if not lines:
+            self.selected_info_label.config(text="已选设备信息：暂无")
+        else:
+            summary = f"已选设备信息：桥梁 {total_bridges} 座，设备 {total_sensors} 个\n" + "；".join(lines[:4])
+            self.selected_info_label.config(text=summary)
 
     def _on_tree_select(self, _event=None) -> None:
         sel_nodes = self.bridge_tree.selection()
@@ -463,21 +516,18 @@ class BridgeApp(tk.Tk):
         return self.online_bridge_sensors.get(bridge, [])
 
     def _collect_selection_from_tree(self) -> tuple[List[int], Dict[str, List[str]]]:
-        sel_nodes = self.bridge_tree.selection()
         roots: Dict[str, str] = {}
         picked_sensors: Dict[str, List[str]] = {}
-        for node in sel_nodes:
-            parent = self.bridge_tree.parent(node)
-            root = node if parent == "" else parent
-            bridge = self.tree_to_bridge.get(root)
-            if not bridge:
+        for root, bridge in self.tree_to_bridge.items():
+            if not self.node_checked.get(root, False):
                 continue
             roots[root] = bridge
-            if parent != "":
-                sensor_name = self.bridge_tree.item(node, "text").replace("📍", "").strip()
-                picked_sensors.setdefault(bridge, [])
-                if sensor_name and sensor_name not in picked_sensors[bridge]:
-                    picked_sensors[bridge].append(sensor_name)
+            for ch in self.bridge_tree.get_children(root):
+                if self.node_checked.get(ch, False):
+                    sensor_name = self.node_raw_text.get(ch, "").strip()
+                    picked_sensors.setdefault(bridge, [])
+                    if sensor_name and sensor_name not in picked_sensors[bridge]:
+                        picked_sensors[bridge].append(sensor_name)
 
         idxs: List[int] = []
         for bridge in roots.values():
