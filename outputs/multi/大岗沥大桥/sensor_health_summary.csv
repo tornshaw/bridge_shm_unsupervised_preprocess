@@ -5,7 +5,7 @@ DGL-1-1L-LX-2_measureDisplacement,大岗沥大桥,DGL-1-1L-LX-2,measureDisplacem
 DGL-2-1L-LX-1_measureDisplacement,大岗沥大桥,DGL-2-1L-LX-1,measureDisplacement,80.688,74.647,78.876,known_system_gap,0.3289,0.0,0.0,0.0
 DGL-1-1L-LX-1_measureDisplacement,大岗沥大桥,DGL-1-1L-LX-1,measureDisplacement,80.984,74.531,79.048,known_system_gap,0.3286,0.0,0.0,0.0
 DGL-2-1L-LX-2_measureDisplacement,大岗沥大桥,DGL-2-1L-LX-2,measureDisplacement,81.003,74.638,79.094,known_system_gap,0.3276,0.0,0.0,0.0
-DGL-1-1L-LX-1_beamPierRelativeDisplacement,大岗沥大桥,DGL-1-1L-LX-1,beamPierRelativeDisplacement,82.722,73.47,79.947,known_system_gap,0.3319,0.0,0.0,0.0
+DGL-1-1L-LX-1_beamPierRelativeDisplacement,大岗沥大桥,DGL-1-1L-LX-1,beamPierRelativeDisplacement,82.712,73.47,79.94,known_system_gap,0.3319,0.0,0.0,0.0001
 DGL-1-1L-LX-2_beamPierRelativeDisplacement,大岗沥大桥,DGL-1-1L-LX-2,beamPierRelativeDisplacement,82.742,73.746,80.043,known_system_gap,0.329,0.0,0.0,0.0
 DGL-2-1L-LX-1_beamPierRelativeDisplacement,大岗沥大桥,DGL-2-1L-LX-1,beamPierRelativeDisplacement,83.604,73.712,80.637,known_system_gap,0.3256,0.0,0.0,0.0
 DGL-2-1L-LX-2_beamPierRelativeDisplacement,大岗沥大桥,DGL-2-1L-LX-2,beamPierRelativeDisplacement,84.472,73.751,81.255,known_system_gap,0.3211,0.0,0.0,0.0

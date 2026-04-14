@@ -1684,7 +1684,7 @@
 2026-01-02 09:50:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,device_gap,device_gap,normal,normal,normal,device_gap,normal,device_gap,device_gap,device_gap
 2026-01-02 10:00:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-02 10:10:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
-2026-01-02 10:20:00,normal,normal,normal,normal,normal,normal,normal,device_gap,device_gap,device_gap,normal,device_gap,device_gap,device_gap,device_gap,device_gap,normal,device_gap,normal,normal,device_gap,normal
+2026-01-02 10:20:00,normal,normal,normal,normal,normal,normal,normal,device_gap,device_gap,device_gap,normal,device_gap,device_gap,device_gap,device_gap,device_gap,normal,device_gap,normal,normal,device_gap,step_change
 2026-01-02 10:30:00,device_gap,device_gap,device_gap,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-02 10:40:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-02 10:50:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
@@ -1808,7 +1808,7 @@
 2026-01-03 06:30:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-03 06:40:00,device_gap,device_gap,device_gap,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-03 06:50:00,normal,normal,normal,device_gap,device_gap,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
-2026-01-03 07:00:00,normal,normal,normal,device_gap,device_gap,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,step_change
+2026-01-03 07:00:00,normal,normal,normal,device_gap,device_gap,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,step_change,normal,device_gap,step_change
 2026-01-03 07:10:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-03 07:20:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-03 07:30:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,device_gap,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,device_gap,normal
@@ -2621,7 +2621,7 @@
 2026-01-08 22:00:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:10:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:20:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
-2026-01-08 22:30:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,drift,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
+2026-01-08 22:30:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,noise,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:40:00,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,step_change,normal,normal,normal,normal,normal,normal,device_gap,normal,normal,device_gap,normal
 2026-01-08 22:50:00,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,normal,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 23:00:00,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal

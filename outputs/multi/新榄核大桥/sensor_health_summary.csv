@@ -7,9 +7,9 @@ XLH-2-2L-LX-2_measureDisplacement,新榄核大桥,XLH-2-2L-LX-2,measureDisplacem
 XLH-2-2L-LX-1_measureDisplacement,新榄核大桥,XLH-2-2L-LX-1,measureDisplacement,83.356,82.853,83.205,known_system_gap,0.238,0.0,0.0,0.0
 XLH-1-1L-LX-1_measureDisplacement,新榄核大桥,XLH-1-1L-LX-1,measureDisplacement,83.356,82.95,83.234,known_system_gap,0.2371,0.0,0.0,0.0
 XLH-1-1L-LX-2_measureDisplacement,新榄核大桥,XLH-1-1L-LX-2,measureDisplacement,83.336,83.046,83.249,known_system_gap,0.2362,0.0,0.0,0.0
-XLH-1-1L-LX-1_beamPierRelativeDisplacement,新榄核大桥,XLH-1-1L-LX-1,beamPierRelativeDisplacement,93.395,81.589,89.853,known_system_gap,0.205,0.0,0.0001,0.0
+XLH-1-1L-LX-1_beamPierRelativeDisplacement,新榄核大桥,XLH-1-1L-LX-1,beamPierRelativeDisplacement,93.381,81.589,89.843,known_system_gap,0.205,0.0,0.0001,0.0
 XLH-1-1L-LX-2_beamPierRelativeDisplacement,新榄核大桥,XLH-1-1L-LX-2,beamPierRelativeDisplacement,94.212,81.797,90.487,known_system_gap,0.1992,0.0,0.0,0.0
-XLH-2-2L-LX-2_beamPierRelativeDisplacement,新榄核大桥,XLH-2-2L-LX-2,beamPierRelativeDisplacement,94.408,81.611,90.569,known_system_gap,0.2001,0.0,0.0001,0.0
+XLH-2-2L-LX-2_beamPierRelativeDisplacement,新榄核大桥,XLH-2-2L-LX-2,beamPierRelativeDisplacement,94.394,81.611,90.559,known_system_gap,0.2001,0.0,0.0001,0.0
 XLH-2-2L-LX-1_beamPierRelativeDisplacement,新榄核大桥,XLH-2-2L-LX-1,beamPierRelativeDisplacement,94.344,81.873,90.603,known_system_gap,0.198,0.0,0.0,0.0
 XLH-1-3L-WSD-1_humidity,新榄核大桥,XLH-1-3L-WSD-1,humidity,98.616,83.039,93.943,known_system_gap,0.1668,0.0,0.0,0.0
 XLH-2-3D-QJ-1_temperature,新榄核大桥,XLH-2-3D-QJ-1,temperature,98.655,83.03,93.968,known_system_gap,0.1667,0.0,0.0,0.0

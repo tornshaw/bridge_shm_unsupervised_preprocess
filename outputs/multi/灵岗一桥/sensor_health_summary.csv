@@ -6,7 +6,7 @@ LGY-0-1L-LX-4_measureDisplacement,灵岗一桥,LGY-0-1L-LX-4,measureDisplacement
 LGY-0-1L-LX-1_measureDisplacement,灵岗一桥,LGY-0-1L-LX-1,measureDisplacement,83.947,82.497,83.512,known_system_gap,0.2386,0.0,0.0,0.0
 LGY-0-1L-LX-3_measureDisplacement,灵岗一桥,LGY-0-1L-LX-3,measureDisplacement,83.986,82.435,83.521,known_system_gap,0.239,0.0,0.0,0.0
 LGY-0-1L-LX-1_beamPierRelativeDisplacement,灵岗一桥,LGY-0-1L-LX-1,beamPierRelativeDisplacement,92.139,81.044,88.811,known_system_gap,0.2159,0.0,0.0,0.0
-LGY-0-1L-LX-2_beamPierRelativeDisplacement,灵岗一桥,LGY-0-1L-LX-2,beamPierRelativeDisplacement,92.397,81.005,88.98,known_system_gap,0.2151,0.0,0.0,0.0
+LGY-0-1L-LX-2_beamPierRelativeDisplacement,灵岗一桥,LGY-0-1L-LX-2,beamPierRelativeDisplacement,92.395,81.005,88.978,known_system_gap,0.2151,0.0,0.0001,0.0
 LGY-0-1L-LX-4_beamPierRelativeDisplacement,灵岗一桥,LGY-0-1L-LX-4,beamPierRelativeDisplacement,92.627,81.144,89.182,known_system_gap,0.2127,0.0,0.0,0.0
 LGY-0-1L-LX-3_beamPierRelativeDisplacement,灵岗一桥,LGY-0-1L-LX-3,beamPierRelativeDisplacement,92.9,81.08,89.354,known_system_gap,0.2121,0.0,0.0,0.0
 LGY-0-1D-QJ-1_temperature,灵岗一桥,LGY-0-1D-QJ-1,temperature,98.479,81.961,93.523,known_system_gap,0.1779,0.0,0.0,0.0

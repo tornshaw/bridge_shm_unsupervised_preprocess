@@ -1,2 +1,2 @@
 ﻿bridge_name,startup_jump_point_count,known_system_gap_sensor_hours,device_gap_sensor_hours,stuck_point_count,drift_point_count,step_change_point_count,spike_noise_point_count
-灵岗二桥,1,5053.33,1240.83,0,2,2,0
+灵岗二桥,0,5053.33,1240.83,0,0,1,1

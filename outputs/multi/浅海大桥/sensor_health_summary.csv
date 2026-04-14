@@ -7,7 +7,7 @@ QH-0-1L-WSD-1_humidity,浅海大桥,QH-0-1L-WSD-1,humidity,71.733,76.419,73.139,
 QH-0-1L-LX-1_measureDisplacement,浅海大桥,QH-0-1L-LX-1,measureDisplacement,71.733,76.428,73.142,device_gap,0.3432,0.0,0.0,0.0
 QH-0-1L-LX-2_measureDisplacement,浅海大桥,QH-0-1L-LX-2,measureDisplacement,71.733,76.454,73.149,device_gap,0.343,0.0,0.0,0.0
 QH-0-1L-LX-3_measureDisplacement,浅海大桥,QH-0-1L-LX-3,measureDisplacement,71.733,76.514,73.167,device_gap,0.3424,0.0,0.0,0.0
-QH-0-1L-LX-3_beamPierRelativeDisplacement,浅海大桥,QH-0-1L-LX-3,beamPierRelativeDisplacement,93.209,75.121,87.783,known_system_gap,0.2587,0.0,0.0001,0.0
+QH-0-1L-LX-3_beamPierRelativeDisplacement,浅海大桥,QH-0-1L-LX-3,beamPierRelativeDisplacement,93.215,75.121,87.787,known_system_gap,0.2587,0.0,0.0,0.0001
 QH-0-1L-LX-4_beamPierRelativeDisplacement,浅海大桥,QH-0-1L-LX-4,beamPierRelativeDisplacement,94.171,75.165,88.469,known_system_gap,0.254,0.0,0.0,0.0
 QH-0-1L-LX-2_beamPierRelativeDisplacement,浅海大桥,QH-0-1L-LX-2,beamPierRelativeDisplacement,94.207,75.267,88.525,known_system_gap,0.2529,0.0,0.0,0.0
 QH-0-1L-LX-1_beamPierRelativeDisplacement,浅海大桥,QH-0-1L-LX-1,beamPierRelativeDisplacement,94.207,75.387,88.561,known_system_gap,0.2517,0.0,0.0,0.0

@@ -1330,8 +1330,8 @@
 2026-01-08 22:00:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:10:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:20:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,normal,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
-2026-01-08 22:30:00,normal,normal,normal,normal,normal,normal,cross_sensor_conflict,device_gap,normal,device_gap,cross_sensor_conflict,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
-2026-01-08 22:40:00,normal,normal,normal,normal,normal,normal,startup_jump,normal,normal,normal,startup_jump,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal,normal
+2026-01-08 22:30:00,normal,normal,normal,normal,normal,normal,normal,device_gap,normal,device_gap,noise,device_gap,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal
+2026-01-08 22:40:00,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,step_change,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 22:50:00,normal,normal,normal,normal,normal,normal,device_gap,normal,normal,normal,device_gap,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 23:00:00,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal
 2026-01-08 23:10:00,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal,normal

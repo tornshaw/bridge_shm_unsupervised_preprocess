@@ -6,9 +6,9 @@ LGE-0-1L-LX-1_measureDisplacement,灵岗二桥,LGE-0-1L-LX-1,measureDisplacement
 LGE-0-1L-LX-2_measureDisplacement,灵岗二桥,LGE-0-1L-LX-2,measureDisplacement,84.141,79.918,82.874,known_system_gap,0.2587,0.0,0.0,0.0
 LGE-0-1L-LX-3_measureDisplacement,灵岗二桥,LGE-0-1L-LX-3,measureDisplacement,84.141,79.926,82.876,known_system_gap,0.2586,0.0,0.0,0.0
 LGE-0-1L-LX-1_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-1,beamPierRelativeDisplacement,92.899,77.929,88.408,known_system_gap,0.2389,0.0,0.0,0.0
-LGE-0-1L-LX-4_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-4,beamPierRelativeDisplacement,92.868,78.136,88.448,known_system_gap,0.2367,0.0,0.0001,0.0
-LGE-0-1L-LX-2_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-2,beamPierRelativeDisplacement,92.884,78.157,88.466,known_system_gap,0.2366,0.0,0.0,0.0
-LGE-0-1L-LX-3_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-3,beamPierRelativeDisplacement,93.336,78.14,88.777,known_system_gap,0.2346,0.0,0.0001,0.0
+LGE-0-1L-LX-2_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-2,beamPierRelativeDisplacement,92.875,78.157,88.459,known_system_gap,0.2366,0.0,0.0,0.0001
+LGE-0-1L-LX-4_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-4,beamPierRelativeDisplacement,92.899,78.136,88.47,known_system_gap,0.2367,0.0,0.0,0.0
+LGE-0-1L-LX-3_beamPierRelativeDisplacement,灵岗二桥,LGE-0-1L-LX-3,beamPierRelativeDisplacement,93.368,78.14,88.799,known_system_gap,0.2346,0.0,0.0,0.0
 LGE-0-1L-WSD-1_temperature,灵岗二桥,LGE-0-1L-WSD-1,temperature,98.439,79.761,92.836,known_system_gap,0.1953,0.0,0.0,0.0
 LGE-0-1L-WSD-1_humidity,灵岗二桥,LGE-0-1L-WSD-1,humidity,98.537,79.677,92.879,known_system_gap,0.1957,0.0,0.0,0.0
 LGE-0-1D-QJ-1_temperature,灵岗二桥,LGE-0-1D-QJ-1,temperature,98.595,79.741,92.939,known_system_gap,0.1949,0.0,0.0,0.0
