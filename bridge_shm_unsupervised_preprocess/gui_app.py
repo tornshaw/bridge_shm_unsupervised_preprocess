@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -45,6 +46,8 @@ class BridgeApp(tk.Tk):
         self.online_bridge_sensors: Dict[str, List[str]] = {}
         self.bridge_sensor_select: Dict[str, List[str]] = {}
         self.bridge_sensors_all: Dict[str, List[str]] = {}
+        self.bridge_items: List[Dict[str, str]] = []
+        self.selected_bridge_indices: List[int] = []
         self.current_bridge_name: Optional[str] = None
 
         self._build_ui()
@@ -129,6 +132,8 @@ class BridgeApp(tk.Tk):
 
         self.current_bridge_label = ttk.Label(right, text="当前桥: -")
         self.current_bridge_label.pack(anchor="w", padx=6, pady=4)
+        self.current_range_label = ttk.Label(right, text="当前数据时间范围: -")
+        self.current_range_label.pack(anchor="w", padx=6, pady=2)
 
         btn_bar = ttk.Frame(right)
         btn_bar.pack(fill=tk.X, padx=6, pady=4)
@@ -217,28 +222,53 @@ class BridgeApp(tk.Tk):
         self.online_bridge_names.clear()
         self.bridge_sensors_all.clear()
         self.bridge_sensor_select.clear()
+        self.bridge_items.clear()
+        self.selected_bridge_indices.clear()
         self.current_bridge_name = None
         self.current_bridge_label.config(text="当前桥: -")
+        self.current_range_label.config(text="当前数据时间范围: -")
         self.sensor_list.delete(0, tk.END)
         self._refresh_bridge_list()
 
+    @staticmethod
+    def _parse_offline_bridge_info(path: str) -> Dict[str, str]:
+        base = os.path.basename(path)
+        stem, _ = os.path.splitext(base)
+        m = re.match(r"^(?P<bridge>.+?)_(?P<start>\d{8})_(?P<end>\d{8})$", stem)
+        if m:
+            return {
+                "bridge_name": m.group("bridge"),
+                "date_range": f"{m.group('start')}~{m.group('end')}",
+                "csv_path": path,
+            }
+        return {"bridge_name": stem, "date_range": "-", "csv_path": path}
+
     def _refresh_bridge_list(self) -> None:
         self.bridge_list.delete(0, tk.END)
+        self.bridge_items = []
+        self.selected_bridge_indices = []
         if self.source_mode.get() == "offline":
             for p in self.offline_csvs:
-                self.bridge_list.insert(tk.END, os.path.basename(p))
+                info = self._parse_offline_bridge_info(p)
+                self.bridge_items.append(info)
+                self.bridge_list.insert(tk.END, info["bridge_name"])
         else:
             for b in self.online_bridge_names:
+                self.bridge_items.append({"bridge_name": b, "date_range": "-", "csv_path": ""})
                 self.bridge_list.insert(tk.END, b)
 
     def _on_bridge_select(self, _event=None) -> None:
         sel = self.bridge_list.curselection()
         if not sel:
             return
+        self.selected_bridge_indices = list(sel)
         idx = sel[0]
-        bridge = self.bridge_list.get(idx)
+        if idx >= len(self.bridge_items):
+            return
+        bridge = self.bridge_items[idx]["bridge_name"]
         self.current_bridge_name = bridge
         self.current_bridge_label.config(text=f"当前桥: {bridge}")
+        self.current_range_label.config(text=f"当前数据时间范围: {self.bridge_items[idx].get('date_range', '-')}")
 
         sensors = self.bridge_sensors_all.get(bridge)
         if sensors is None:
@@ -256,7 +286,7 @@ class BridgeApp(tk.Tk):
 
     def _load_sensors_for_bridge(self, bridge: str) -> List[str]:
         if self.source_mode.get() == "offline":
-            path = next((p for p in self.offline_csvs if os.path.basename(p) == bridge), None)
+            path = next((it["csv_path"] for it in self.bridge_items if it["bridge_name"] == bridge and it.get("csv_path")), None)
             if not path:
                 return []
             df = pd.read_csv(path, nrows=5)
@@ -303,6 +333,8 @@ class BridgeApp(tk.Tk):
             return
 
         selected_idx = self.bridge_list.curselection()
+        if not selected_idx and self.selected_bridge_indices:
+            selected_idx = tuple(self.selected_bridge_indices)
         if not selected_idx:
             messagebox.showwarning("提示", "请至少选择一座桥")
             return
@@ -314,13 +346,18 @@ class BridgeApp(tk.Tk):
             from .app_service import build_offline_tasks, run_multi_bridge_tasks
 
             if self.source_mode.get() == "offline":
-                selected_files = [self.offline_csvs[i] for i in selected_idx]
+                selected_files = []
+                for i in selected_idx:
+                    if i < len(self.bridge_items):
+                        p = self.bridge_items[i].get("csv_path")
+                        if p:
+                            selected_files.append(p)
                 tasks = build_offline_tasks(selected_files, self.bridge_sensor_select)
             else:
                 export_script = self.export_script_var.get().strip()
                 tasks = []
                 for i in selected_idx:
-                    bridge = self.online_bridge_names[i]
+                    bridge = self.bridge_items[i]["bridge_name"]
                     csv_out = os.path.join(output_root, f"{bridge}_online.csv")
                     fetch_bridge_data_online(
                         bridge_name=bridge,
