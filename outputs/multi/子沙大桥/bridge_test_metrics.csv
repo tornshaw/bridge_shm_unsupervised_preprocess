@@ -1,0 +1,2 @@
+﻿bridge_name,samples,sensor_count,total_missing_ratio,system_missing_ratio,device_missing_ratio,avg_device_health,avg_availability,bridge_project_score
+子沙大桥,12567,22,0.2953,0.25,0.0453,90.022,72.756,84.843

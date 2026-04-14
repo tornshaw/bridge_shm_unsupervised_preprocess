@@ -1,0 +1,2 @@
+﻿bridge_name,samples,sensor_count,total_missing_ratio,system_missing_ratio,device_missing_ratio,avg_device_health,avg_availability,bridge_project_score
+民生桥,11277,18,0.1941,0.17,0.0241,94.687,82.079,90.905
