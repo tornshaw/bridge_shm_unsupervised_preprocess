@@ -98,6 +98,61 @@ def test_doris_connection(host: str, port: int, user: str, password: str, databa
                 pass
 
 
+def load_bridge_sensors_from_mapping(mapping_file: str) -> Dict[str, List[str]]:
+    """读取 mapping 表中的桥梁-测点映射，返回 {bridge_name: [sensor, ...]}."""
+    df = pd.read_excel(mapping_file)
+    bridge_col = next((c for c in ["bridge_name", "桥梁名称", "bridge", "桥名"] if c in df.columns), df.columns[0])
+    sensor_col = next(
+        (c for c in ["point_code", "测点编号", "sensor_name", "point_name", "测点名称"] if c in df.columns),
+        None,
+    )
+    if sensor_col is None:
+        return {}
+
+    out: Dict[str, List[str]] = {}
+    for _, row in df[[bridge_col, sensor_col]].dropna().iterrows():
+        b = str(row[bridge_col]).strip()
+        s = str(row[sensor_col]).strip()
+        if not b or not s:
+            continue
+        out.setdefault(b, [])
+        if s not in out[b]:
+            out[b].append(s)
+    return out
+
+
+def test_doris_connection(host: str, port: int, user: str, password: str, database: str) -> tuple[bool, str]:
+    """测试 Doris 数据库连接状态."""
+    try:
+        import pymysql  # type: ignore
+    except Exception as e:
+        return False, f"缺少 pymysql 依赖: {e}"
+
+    conn = None
+    try:
+        conn = pymysql.connect(
+            host=host,
+            port=int(port),
+            user=user,
+            password=password,
+            database=database,
+            connect_timeout=5,
+            charset="utf8mb4",
+        )
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True, "数据库连接成功"
+    except Exception as e:
+        return False, f"数据库连接失败: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def fetch_bridge_data_with_export_script(
     script_path: str,
     bridge_name: str,
