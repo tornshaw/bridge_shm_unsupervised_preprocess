@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import pandas as pd
 
 from .online_data import (
-    fetch_bridge_data_with_export_script,
+    fetch_bridge_data_online,
     find_mapping_file,
     load_bridge_names_from_mapping,
 )
@@ -35,6 +35,7 @@ class BridgeApp(tk.Tk):
         self.online_bridge_names: List[str] = []
         self.bridge_sensor_select: Dict[str, List[str]] = {}
         self.bridge_sensors_all: Dict[str, List[str]] = {}
+        self.current_bridge_name: Optional[str] = None
 
         self._build_ui()
 
@@ -154,6 +155,7 @@ class BridgeApp(tk.Tk):
             return
         idx = sel[0]
         bridge = self.bridge_list.get(idx)
+        self.current_bridge_name = bridge
         self.current_bridge_label.config(text=f"当前桥: {bridge}")
 
         sensors = self.bridge_sensors_all.get(bridge)
@@ -186,11 +188,10 @@ class BridgeApp(tk.Tk):
         self.sensor_list.selection_clear(0, tk.END)
 
     def _save_sensor_selection(self) -> None:
-        sel = self.bridge_list.curselection()
-        if not sel:
+        bridge = self.current_bridge_name
+        if not bridge:
             messagebox.showwarning("提示", "请先选中一个桥")
             return
-        bridge = self.bridge_list.get(sel[0])
         idxs = self.sensor_list.curselection()
         sensors = [self.sensor_list.get(i) for i in idxs]
         self.bridge_sensor_select[bridge] = sensors
@@ -216,33 +217,23 @@ class BridgeApp(tk.Tk):
         os.makedirs(output_root, exist_ok=True)
 
         try:
-            try:
-                from .app_service import build_offline_tasks, run_multi_bridge_tasks
-            except ModuleNotFoundError as dep_err:
-                missing = str(dep_err)
-                if "torch" in missing:
-                    raise RuntimeError(
-                        "检测到运行依赖缺失：torch。请在打包环境安装 torch，或在 PyInstaller 中显式收集 torch 依赖。"
-                    ) from dep_err
-                raise
+            from .app_service import build_offline_tasks, run_multi_bridge_tasks
 
             if self.source_mode.get() == "offline":
                 selected_files = [self.offline_csvs[i] for i in selected_idx]
                 tasks = build_offline_tasks(selected_files, self.bridge_sensor_select)
             else:
                 export_script = self.export_script_var.get().strip()
-                if not os.path.exists(export_script):
-                    raise FileNotFoundError(f"导出脚本不存在: {export_script}")
                 tasks = []
                 for i in selected_idx:
                     bridge = self.online_bridge_names[i]
                     csv_out = os.path.join(output_root, f"{bridge}_online.csv")
-                    fetch_bridge_data_with_export_script(
-                        script_path=export_script,
+                    fetch_bridge_data_online(
                         bridge_name=bridge,
                         start_time=start.strftime("%Y-%m-%d %H:%M:%S"),
                         end_time=end.strftime("%Y-%m-%d %H:%M:%S"),
                         output_csv=csv_out,
+                        export_script=export_script,
                     )
                     tasks.extend(build_offline_tasks([csv_out], self.bridge_sensor_select))
 
