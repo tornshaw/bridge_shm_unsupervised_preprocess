@@ -9,6 +9,11 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Dict, List, Optional
 
 import pandas as pd
+try:
+    from PIL import Image, ImageTk  # type: ignore
+except Exception:  # pragma: no cover
+    Image = None
+    ImageTk = None
 
 from .online_data import (
     fetch_bridge_data_online,
@@ -41,6 +46,8 @@ class BridgeApp(tk.Tk):
         self.db_password_var = tk.StringVar(value="")
         self.db_name_var = tk.StringVar(value="")
         self.db_status_var = tk.StringVar(value="未测试")
+        self.online_extract_start_var = tk.StringVar(value="2026-03-01 00:00:00")
+        self.online_extract_end_var = tk.StringVar(value="2026-03-07 23:59:59")
 
         self.offline_csvs: List[str] = []
         self.online_bridge_names: List[str] = []
@@ -54,6 +61,7 @@ class BridgeApp(tk.Tk):
         self.result_images: List[str] = []
         self.result_image_index: int = 0
         self.result_photo = None
+        self.current_image_path: Optional[str] = None
 
         self._build_ui()
 
@@ -106,9 +114,17 @@ class BridgeApp(tk.Tk):
         ttk.Label(online_cfg, text="DB").grid(row=0, column=8, padx=5, pady=4, sticky="e")
         self.entry_db = ttk.Entry(online_cfg, textvariable=self.db_name_var, width=14)
         self.entry_db.grid(row=0, column=9, padx=5, pady=4)
-        self.btn_test_conn = ttk.Button(online_cfg, text="测试连接", command=self._test_db_connection)
+        self.btn_test_conn = ttk.Button(online_cfg, text="数据库连接", command=self._test_db_connection)
         self.btn_test_conn.grid(row=0, column=10, padx=8, pady=4)
         ttk.Label(online_cfg, textvariable=self.db_status_var).grid(row=0, column=11, padx=8, pady=4, sticky="w")
+        ttk.Label(online_cfg, text="提取开始").grid(row=1, column=0, padx=5, pady=4, sticky="e")
+        self.online_extract_start_entry = ttk.Entry(online_cfg, textvariable=self.online_extract_start_var, width=20)
+        self.online_extract_start_entry.grid(row=1, column=1, padx=5, pady=4)
+        ttk.Label(online_cfg, text="提取结束").grid(row=1, column=2, padx=5, pady=4, sticky="e")
+        self.online_extract_end_entry = ttk.Entry(online_cfg, textvariable=self.online_extract_end_var, width=20)
+        self.online_extract_end_entry.grid(row=1, column=3, padx=5, pady=4)
+        self.btn_extract_online = ttk.Button(online_cfg, text="提取数据", command=self._extract_online_data)
+        self.btn_extract_online.grid(row=1, column=4, padx=8, pady=4)
 
         period = ttk.LabelFrame(self, text="分析时段（多桥统一时段）")
         period.pack(fill=tk.X, padx=10, pady=6)
@@ -131,40 +147,29 @@ class BridgeApp(tk.Tk):
         self.bridge_tree.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
         self.bridge_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
-        mid = ttk.LabelFrame(body, text="传感器选择（当前桥）")
-        mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=8)
+        mid = ttk.LabelFrame(body, text="当前选择信息")
+        mid.pack(side=tk.LEFT, fill=tk.Y, expand=False, padx=8)
 
         self.current_bridge_label = ttk.Label(mid, text="当前桥: -")
         self.current_bridge_label.pack(anchor="w", padx=6, pady=4)
         self.current_range_label = ttk.Label(mid, text="当前数据时间范围: -")
         self.current_range_label.pack(anchor="w", padx=6, pady=2)
-
-        btn_bar = ttk.Frame(mid)
-        btn_bar.pack(fill=tk.X, padx=6, pady=4)
-        ttk.Button(btn_bar, text="全选", command=self._select_all_sensors).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_bar, text="清空勾选", command=self._clear_sensors).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_bar, text="清除全部桥传感器选择", command=self._clear_all_sensor_selection).pack(side=tk.LEFT, padx=4)
-        ttk.Button(btn_bar, text="保存当前桥传感器选择", command=self._save_sensor_selection).pack(side=tk.LEFT, padx=8)
-
-        self.sensor_list = tk.Listbox(mid, selectmode=tk.MULTIPLE, width=38, height=22)
-        self.sensor_list.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        ttk.Label(mid, text="提示：在左侧树中可直接多选桥梁与测点。").pack(anchor="w", padx=6, pady=6)
 
         right = ttk.LabelFrame(body, text="分析图片（右）")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6)
         nav = ttk.Frame(right)
         nav.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Button(nav, text="普通预处理分析", command=lambda: self._run("普通预处理分析")).pack(side=tk.LEFT, padx=6)
+        ttk.Button(nav, text="时空图+多置信融合分析", command=lambda: self._run("时空图+多置信融合分析")).pack(side=tk.LEFT, padx=6)
+        ttk.Button(nav, text="清除分析结果", command=self._clear_analysis_results).pack(side=tk.LEFT, padx=6)
         ttk.Button(nav, text="上一张", command=lambda: self._switch_image(-1)).pack(side=tk.LEFT, padx=4)
         ttk.Button(nav, text="下一张", command=lambda: self._switch_image(1)).pack(side=tk.LEFT, padx=4)
         self.image_title = ttk.Label(nav, text="暂无图片")
         self.image_title.pack(side=tk.LEFT, padx=8)
         self.image_label = ttk.Label(right)
         self.image_label.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        run_bar = ttk.Frame(self)
-        run_bar.pack(fill=tk.X, padx=10, pady=8)
-        ttk.Button(run_bar, text="普通预处理分析", command=lambda: self._run("普通预处理分析")).pack(side=tk.RIGHT, padx=6)
-        ttk.Button(run_bar, text="时空图+多置信融合分析", command=lambda: self._run("时空图+多置信融合分析")).pack(side=tk.RIGHT, padx=6)
-        ttk.Button(run_bar, text="清除分析结果", command=self._clear_analysis_results).pack(side=tk.LEFT, padx=6)
+        self.image_label.bind("<Configure>", lambda _e: self._render_current_image())
 
         bottom = ttk.LabelFrame(self, text="分析结果表格与日志（下）")
         bottom.pack(fill=tk.BOTH, padx=10, pady=6)
@@ -212,11 +217,20 @@ class BridgeApp(tk.Tk):
             self.image_title.config(text="暂无图片")
             self.image_label.config(image="", text="暂无图片")
             self.result_photo = None
+            self.current_image_path = None
             return
         path = self.result_images[self.result_image_index]
+        self.current_image_path = path
         self.image_title.config(text=os.path.basename(path))
         try:
-            self.result_photo = tk.PhotoImage(file=path)
+            if Image is not None and ImageTk is not None:
+                im = Image.open(path)
+                w = max(200, self.image_label.winfo_width() - 10)
+                h = max(160, self.image_label.winfo_height() - 10)
+                im.thumbnail((w, h))
+                self.result_photo = ImageTk.PhotoImage(im)
+            else:
+                self.result_photo = tk.PhotoImage(file=path)
             self.image_label.config(image=self.result_photo, text="")
         except Exception:
             self.image_label.config(image="", text=f"无法显示图片: {path}")
@@ -230,7 +244,19 @@ class BridgeApp(tk.Tk):
     def _on_mode_change(self) -> None:
         offline = self.source_mode.get() == "offline"
         self.btn_add_offline.config(state=tk.NORMAL if offline else tk.DISABLED)
-        for w in [self.btn_load_online, self.entry_export, self.btn_test_conn, self.entry_host, self.entry_port, self.entry_user, self.entry_pwd, self.entry_db]:
+        for w in [
+            self.btn_load_online,
+            self.entry_export,
+            self.btn_test_conn,
+            self.entry_host,
+            self.entry_port,
+            self.entry_user,
+            self.entry_pwd,
+            self.entry_db,
+            self.online_extract_start_entry,
+            self.online_extract_end_entry,
+            self.btn_extract_online,
+        ]:
             w.config(state=tk.DISABLED if offline else tk.NORMAL)
         self._refresh_bridge_list()
 
@@ -281,6 +307,53 @@ class BridgeApp(tk.Tk):
         else:
             messagebox.showwarning("连接测试", msg)
 
+    def _extract_online_data(self) -> None:
+        if ("成功" not in self.db_status_var.get()) and ("端口可达" not in self.db_status_var.get()):
+            messagebox.showwarning("提示", "请先点击“数据库连接”。")
+            return
+        if not self.online_bridge_names:
+            messagebox.showwarning("提示", "请先点击“读取mapping桥名”。")
+            return
+        selected_idx, _ = self._collect_selection_from_tree()
+        if not selected_idx:
+            messagebox.showwarning("提示", "请先在左侧树中选择桥梁。")
+            return
+        try:
+            start = pd.to_datetime(self.online_extract_start_var.get())
+            end = pd.to_datetime(self.online_extract_end_var.get())
+        except Exception as e:
+            messagebox.showerror("参数错误", f"提取时间区间无效: {e}")
+            return
+        if end < start:
+            messagebox.showerror("参数错误", "提取结束时间不能早于开始时间")
+            return
+
+        output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
+        export_script = self.export_script_var.get().strip()
+        extracted_items: List[Dict[str, str]] = []
+        for i in selected_idx:
+            bridge = self.bridge_items[i]["bridge_name"]
+            csv_out = os.path.join(output_root, f"{bridge}_online.csv")
+            fetch_bridge_data_online(
+                bridge_name=bridge,
+                start_time=start.strftime("%Y-%m-%d %H:%M:%S"),
+                end_time=end.strftime("%Y-%m-%d %H:%M:%S"),
+                output_csv=csv_out,
+                export_script=export_script,
+            )
+            extracted_items.append(
+                {
+                    "bridge_name": bridge,
+                    "date_range": f"{start.strftime('%Y%m%d')}~{end.strftime('%Y%m%d')}",
+                    "csv_path": csv_out,
+                }
+            )
+            # 提取后用实际 CSV 列刷新测点
+            self.bridge_sensors_all[bridge] = self._load_sensors_from_csv(csv_out)
+        self.bridge_items = extracted_items
+        self._refresh_bridge_tree_from_items()
+        messagebox.showinfo("成功", f"在线提取完成，桥梁数={len(extracted_items)}")
+
     def _clear_selected_data(self) -> None:
         self.offline_csvs.clear()
         self.online_bridge_names.clear()
@@ -293,7 +366,6 @@ class BridgeApp(tk.Tk):
         self.current_range_label.config(text="当前数据时间范围: -")
         for item in self.bridge_tree.get_children():
             self.bridge_tree.delete(item)
-        self.sensor_list.delete(0, tk.END)
         self._refresh_bridge_list()
 
     @staticmethod
@@ -309,24 +381,31 @@ class BridgeApp(tk.Tk):
             }
         return {"bridge_name": stem, "date_range": "-", "csv_path": path}
 
-    def _refresh_bridge_list(self) -> None:
+    @staticmethod
+    def _load_sensors_from_csv(path: str) -> List[str]:
+        df = pd.read_csv(path, nrows=5)
+        return list(df.columns[1:])
+
+    def _refresh_bridge_tree_from_items(self) -> None:
         for item in self.bridge_tree.get_children():
             self.bridge_tree.delete(item)
-        self.bridge_items = []
         self.selected_bridge_indices = []
         self.tree_to_bridge = {}
+        for info in self.bridge_items:
+            item_id = self.bridge_tree.insert("", tk.END, text=info["bridge_name"], open=True)
+            self.tree_to_bridge[item_id] = info["bridge_name"]
+        self._refresh_tree_sensors()
+
+    def _refresh_bridge_list(self) -> None:
+        self.bridge_items = []
         if self.source_mode.get() == "offline":
             for p in self.offline_csvs:
                 info = self._parse_offline_bridge_info(p)
                 self.bridge_items.append(info)
-                item_id = self.bridge_tree.insert("", tk.END, text=info["bridge_name"], open=True)
-                self.tree_to_bridge[item_id] = info["bridge_name"]
         else:
             for b in self.online_bridge_names:
                 self.bridge_items.append({"bridge_name": b, "date_range": "-", "csv_path": ""})
-                item_id = self.bridge_tree.insert("", tk.END, text=b, open=True)
-                self.tree_to_bridge[item_id] = b
-        self._refresh_tree_sensors()
+        self._refresh_bridge_tree_from_items()
 
     def _refresh_tree_sensors(self) -> None:
         for node_id, bridge in list(self.tree_to_bridge.items()):
@@ -370,44 +449,44 @@ class BridgeApp(tk.Tk):
             sensors = self._load_sensors_for_bridge(bridge)
             self.bridge_sensors_all[bridge] = sensors
 
-        self.sensor_list.delete(0, tk.END)
-        for s in sensors:
-            self.sensor_list.insert(tk.END, s)
-
-        selected = set(self.bridge_sensor_select.get(bridge, sensors))
-        for i, s in enumerate(sensors):
-            if s in selected:
-                self.sensor_list.selection_set(i)
+        # 传感器选择在树中完成，不再使用独立列表。
 
     def _load_sensors_for_bridge(self, bridge: str) -> List[str]:
         if self.source_mode.get() == "offline":
             path = next((it["csv_path"] for it in self.bridge_items if it["bridge_name"] == bridge and it.get("csv_path")), None)
             if not path:
                 return []
-            df = pd.read_csv(path, nrows=5)
-            return list(df.columns[1:])
+            return self._load_sensors_from_csv(path)
+        path = next((it["csv_path"] for it in self.bridge_items if it["bridge_name"] == bridge and it.get("csv_path")), None)
+        if path and os.path.exists(path):
+            return self._load_sensors_from_csv(path)
         return self.online_bridge_sensors.get(bridge, [])
 
-    def _select_all_sensors(self) -> None:
-        self.sensor_list.selection_set(0, tk.END)
+    def _collect_selection_from_tree(self) -> tuple[List[int], Dict[str, List[str]]]:
+        sel_nodes = self.bridge_tree.selection()
+        roots: Dict[str, str] = {}
+        picked_sensors: Dict[str, List[str]] = {}
+        for node in sel_nodes:
+            parent = self.bridge_tree.parent(node)
+            root = node if parent == "" else parent
+            bridge = self.tree_to_bridge.get(root)
+            if not bridge:
+                continue
+            roots[root] = bridge
+            if parent != "":
+                sensor_name = self.bridge_tree.item(node, "text").replace("📍", "").strip()
+                picked_sensors.setdefault(bridge, [])
+                if sensor_name and sensor_name not in picked_sensors[bridge]:
+                    picked_sensors[bridge].append(sensor_name)
 
-    def _clear_sensors(self) -> None:
-        self.sensor_list.selection_clear(0, tk.END)
-
-    def _save_sensor_selection(self) -> None:
-        bridge = self.current_bridge_name
-        if not bridge:
-            messagebox.showwarning("提示", "请先选中一个桥")
-            return
-        idxs = self.sensor_list.curselection()
-        sensors = [self.sensor_list.get(i) for i in idxs]
-        self.bridge_sensor_select[bridge] = sensors
-        messagebox.showinfo("成功", f"已保存 {bridge} 传感器选择: {len(sensors)} 个")
-
-    def _clear_all_sensor_selection(self) -> None:
-        self.bridge_sensor_select.clear()
-        self._clear_sensors()
-        messagebox.showinfo("成功", "已清除全部桥梁的传感器选择。")
+        idxs: List[int] = []
+        for bridge in roots.values():
+            idx = next((i for i, it in enumerate(self.bridge_items) if it["bridge_name"] == bridge), -1)
+            if idx >= 0:
+                idxs.append(idx)
+                if bridge not in picked_sensors:
+                    picked_sensors[bridge] = self.bridge_sensors_all.get(bridge, [])
+        return idxs, picked_sensors
 
     def _clear_analysis_results(self) -> None:
         output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
@@ -430,10 +509,12 @@ class BridgeApp(tk.Tk):
             messagebox.showerror("参数错误", str(e))
             return
 
-        selected_idx = tuple(self.selected_bridge_indices)
+        selected_idx, picked_sensors = self._collect_selection_from_tree()
+        selected_idx = tuple(selected_idx)
         if not selected_idx:
             messagebox.showwarning("提示", "请至少选择一座桥")
             return
+        self.bridge_sensor_select.update(picked_sensors)
 
         output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
         os.makedirs(output_root, exist_ok=True)
