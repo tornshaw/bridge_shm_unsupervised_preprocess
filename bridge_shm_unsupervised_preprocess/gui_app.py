@@ -40,11 +40,11 @@ class BridgeApp(tk.Tk):
         self.end_var = tk.StringVar(value="2026-03-07 23:59:59")
         self.output_dir_var = tk.StringVar(value="outputs/gui_analysis")
         self.export_script_var = tk.StringVar(value="data-export-csv.py")
-        self.db_host_var = tk.StringVar(value="localhost")
+        self.db_host_var = tk.StringVar(value="10.172.121.139")
         self.db_port_var = tk.StringVar(value="9030")
         self.db_user_var = tk.StringVar(value="root")
-        self.db_password_var = tk.StringVar(value="")
-        self.db_name_var = tk.StringVar(value="")
+        self.db_password_var = tk.StringVar(value="8j2q8nWs0u7ZogoDzMxa")
+        self.db_name_var = tk.StringVar(value="CITYLL_DW_DWD")
         self.db_status_var = tk.StringVar(value="未测试")
         self.online_extract_start_var = tk.StringVar(value="2026-03-01 00:00:00")
         self.online_extract_end_var = tk.StringVar(value="2026-03-07 23:59:59")
@@ -81,8 +81,6 @@ class BridgeApp(tk.Tk):
 
         self.btn_add_offline = ttk.Button(cfg, text="加载离线CSV(可多选)", command=self._add_offline_csvs)
         self.btn_add_offline.grid(row=0, column=2, padx=8, pady=6)
-        self.btn_load_online = ttk.Button(cfg, text="读取mapping桥名", command=self._load_online_bridges)
-        self.btn_load_online.grid(row=0, column=3, padx=8, pady=6)
         ttk.Button(cfg, text="清除已选数据", command=self._clear_selected_data).grid(row=0, column=4, padx=8, pady=6)
 
         ttk.Label(cfg, text="导出脚本:").grid(row=0, column=5, padx=6, pady=6, sticky="e")
@@ -119,14 +117,16 @@ class BridgeApp(tk.Tk):
         self.btn_test_conn = ttk.Button(online_cfg, text="数据库连接", command=self._test_db_connection)
         self.btn_test_conn.grid(row=0, column=10, padx=8, pady=4)
         ttk.Label(online_cfg, textvariable=self.db_status_var).grid(row=0, column=11, padx=8, pady=4, sticky="w")
-        ttk.Label(online_cfg, text="提取开始").grid(row=1, column=0, padx=5, pady=4, sticky="e")
+        self.btn_load_online = ttk.Button(online_cfg, text="读取mapping桥名", command=self._load_online_bridges)
+        self.btn_load_online.grid(row=1, column=0, padx=8, pady=4)
+        ttk.Label(online_cfg, text="提取开始").grid(row=1, column=1, padx=5, pady=4, sticky="e")
         self.online_extract_start_entry = ttk.Entry(online_cfg, textvariable=self.online_extract_start_var, width=20)
-        self.online_extract_start_entry.grid(row=1, column=1, padx=5, pady=4)
-        ttk.Label(online_cfg, text="提取结束").grid(row=1, column=2, padx=5, pady=4, sticky="e")
+        self.online_extract_start_entry.grid(row=1, column=2, padx=5, pady=4)
+        ttk.Label(online_cfg, text="提取结束").grid(row=1, column=3, padx=5, pady=4, sticky="e")
         self.online_extract_end_entry = ttk.Entry(online_cfg, textvariable=self.online_extract_end_var, width=20)
-        self.online_extract_end_entry.grid(row=1, column=3, padx=5, pady=4)
+        self.online_extract_end_entry.grid(row=1, column=4, padx=5, pady=4)
         self.btn_extract_online = ttk.Button(online_cfg, text="提取数据", command=self._extract_online_data)
-        self.btn_extract_online.grid(row=1, column=4, padx=8, pady=4)
+        self.btn_extract_online.grid(row=1, column=5, padx=8, pady=4)
 
         period = ttk.LabelFrame(self, text="分析时段（多桥统一时段）")
         period.pack(fill=tk.X, padx=10, pady=6)
@@ -143,10 +143,19 @@ class BridgeApp(tk.Tk):
         body = ttk.Frame(self)
         body.pack(fill=tk.BOTH, expand=True, padx=10, pady=6)
 
-        left = ttk.LabelFrame(body, text="桥梁-测点树（左）")
+        left = ttk.LabelFrame(body, text="桥梁-测点树")
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=False)
-        self.bridge_tree = ttk.Treeview(left, columns=("type",), show="tree", height=26, selectmode="extended")
-        self.bridge_tree.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        tree_wrap = ttk.Frame(left)
+        tree_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.bridge_tree = ttk.Treeview(tree_wrap, columns=("type",), show="tree", height=26, selectmode="extended")
+        tree_scroll_y = ttk.Scrollbar(tree_wrap, orient=tk.VERTICAL, command=self.bridge_tree.yview)
+        tree_scroll_x = ttk.Scrollbar(tree_wrap, orient=tk.HORIZONTAL, command=self.bridge_tree.xview)
+        self.bridge_tree.configure(yscrollcommand=tree_scroll_y.set, xscrollcommand=tree_scroll_x.set)
+        self.bridge_tree.grid(row=0, column=0, sticky="nsew")
+        tree_scroll_y.grid(row=0, column=1, sticky="ns")
+        tree_scroll_x.grid(row=1, column=0, sticky="ew")
+        tree_wrap.rowconfigure(0, weight=1)
+        tree_wrap.columnconfigure(0, weight=1)
         self.bridge_tree.bind("<<TreeviewSelect>>", self._on_tree_select)
 
         mid = ttk.LabelFrame(body, text="当前选择信息")
@@ -160,7 +169,7 @@ class BridgeApp(tk.Tk):
         self.selected_info_label = ttk.Label(mid, text="已选设备信息：暂无")
         self.selected_info_label.pack(anchor="w", padx=6, pady=4)
 
-        right = ttk.LabelFrame(body, text="分析图片（右）")
+        right = ttk.LabelFrame(body, text="分析图片")
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=6)
         nav = ttk.Frame(right)
         nav.pack(fill=tk.X, padx=6, pady=4)
@@ -169,19 +178,50 @@ class BridgeApp(tk.Tk):
         ttk.Button(nav, text="清除分析结果", command=self._clear_analysis_results).pack(side=tk.LEFT, padx=6)
         ttk.Button(nav, text="上一张", command=lambda: self._switch_image(-1)).pack(side=tk.LEFT, padx=4)
         ttk.Button(nav, text="下一张", command=lambda: self._switch_image(1)).pack(side=tk.LEFT, padx=4)
+        ttk.Button(nav, text="新窗口打开", command=self._open_image_window).pack(side=tk.LEFT, padx=4)
         self.image_title = ttk.Label(nav, text="暂无图片")
         self.image_title.pack(side=tk.LEFT, padx=8)
-        self.image_label = ttk.Label(right)
-        self.image_label.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-        self.image_label.bind("<Configure>", lambda _e: self._render_current_image())
+        img_wrap = ttk.Frame(right)
+        img_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
+        self.image_canvas = tk.Canvas(img_wrap, bg="white")
+        img_scroll_y = ttk.Scrollbar(img_wrap, orient=tk.VERTICAL, command=self.image_canvas.yview)
+        img_scroll_x = ttk.Scrollbar(img_wrap, orient=tk.HORIZONTAL, command=self.image_canvas.xview)
+        self.image_canvas.configure(yscrollcommand=img_scroll_y.set, xscrollcommand=img_scroll_x.set)
+        self.image_canvas.grid(row=0, column=0, sticky="nsew")
+        img_scroll_y.grid(row=0, column=1, sticky="ns")
+        img_scroll_x.grid(row=1, column=0, sticky="ew")
+        img_wrap.rowconfigure(0, weight=1)
+        img_wrap.columnconfigure(0, weight=1)
+        self.image_label = ttk.Label(self.image_canvas)
+        self.image_canvas_window = self.image_canvas.create_window((0, 0), window=self.image_label, anchor="nw")
+        self.image_label.bind("<Configure>", lambda _e: self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all")))
+        self.image_canvas.bind("<Configure>", lambda _e: self._render_current_image())
         self.bridge_tree.bind("<Button-1>", self._on_tree_click, add="+")
 
-        bottom = ttk.LabelFrame(self, text="分析结果表格与日志（下）")
+        bottom = ttk.LabelFrame(self, text="分析结果表格与日志")
         bottom.pack(fill=tk.BOTH, padx=10, pady=6)
-        self.summary_table = ttk.Treeview(bottom, show="headings", height=6)
-        self.summary_table.pack(fill=tk.X, padx=6, pady=4)
-        self.result_text = tk.Text(bottom, height=6)
-        self.result_text.pack(fill=tk.BOTH, padx=6, pady=4)
+        table_wrap = ttk.Frame(bottom)
+        table_wrap.pack(fill=tk.X, padx=6, pady=4)
+        self.summary_table = ttk.Treeview(table_wrap, show="headings", height=6)
+        table_scroll_y = ttk.Scrollbar(table_wrap, orient=tk.VERTICAL, command=self.summary_table.yview)
+        table_scroll_x = ttk.Scrollbar(table_wrap, orient=tk.HORIZONTAL, command=self.summary_table.xview)
+        self.summary_table.configure(yscrollcommand=table_scroll_y.set, xscrollcommand=table_scroll_x.set)
+        self.summary_table.grid(row=0, column=0, sticky="nsew")
+        table_scroll_y.grid(row=0, column=1, sticky="ns")
+        table_scroll_x.grid(row=1, column=0, sticky="ew")
+        table_wrap.rowconfigure(0, weight=1)
+        table_wrap.columnconfigure(0, weight=1)
+        log_wrap = ttk.Frame(bottom)
+        log_wrap.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        self.result_text = tk.Text(log_wrap, height=6)
+        log_scroll_y = ttk.Scrollbar(log_wrap, orient=tk.VERTICAL, command=self.result_text.yview)
+        log_scroll_x = ttk.Scrollbar(log_wrap, orient=tk.HORIZONTAL, command=self.result_text.xview)
+        self.result_text.configure(yscrollcommand=log_scroll_y.set, xscrollcommand=log_scroll_x.set, wrap=tk.NONE)
+        self.result_text.grid(row=0, column=0, sticky="nsew")
+        log_scroll_y.grid(row=0, column=1, sticky="ns")
+        log_scroll_x.grid(row=1, column=0, sticky="ew")
+        log_wrap.rowconfigure(0, weight=1)
+        log_wrap.columnconfigure(0, weight=1)
         self.result_text.insert(tk.END, "等待分析...\n")
         self.result_text.configure(state=tk.DISABLED)
         self._on_mode_change()
@@ -230,13 +270,15 @@ class BridgeApp(tk.Tk):
         try:
             if Image is not None and ImageTk is not None:
                 im = Image.open(path)
-                w = max(200, self.image_label.winfo_width() - 10)
-                h = max(160, self.image_label.winfo_height() - 10)
+                w = max(200, self.image_canvas.winfo_width() - 20)
+                h = max(160, self.image_canvas.winfo_height() - 20)
                 im.thumbnail((w, h))
                 self.result_photo = ImageTk.PhotoImage(im)
             else:
                 self.result_photo = tk.PhotoImage(file=path)
             self.image_label.config(image=self.result_photo, text="")
+            self.image_canvas.itemconfigure(self.image_canvas_window, width=self.result_photo.width(), height=self.result_photo.height())
+            self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all"))
         except Exception:
             self.image_label.config(image="", text=f"无法显示图片: {path}")
 
@@ -245,6 +287,48 @@ class BridgeApp(tk.Tk):
             return
         self.result_image_index = (self.result_image_index + step) % len(self.result_images)
         self._render_current_image()
+
+    def _open_image_window(self) -> None:
+        if not self.current_image_path or not os.path.exists(self.current_image_path):
+            messagebox.showwarning("提示", "当前没有可打开的图片。")
+            return
+        win = tk.Toplevel(self)
+        win.title(os.path.basename(self.current_image_path))
+        win.geometry("1200x800")
+        scale_var = tk.DoubleVar(value=1.0)
+        top = ttk.Frame(win)
+        top.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Label(top, text="缩放").pack(side=tk.LEFT)
+        ttk.Scale(top, from_=0.2, to=3.0, variable=scale_var, orient=tk.HORIZONTAL, length=280).pack(side=tk.LEFT, padx=6)
+        canvas = tk.Canvas(win, bg="white")
+        sy = ttk.Scrollbar(win, orient=tk.VERTICAL, command=canvas.yview)
+        sx = ttk.Scrollbar(win, orient=tk.HORIZONTAL, command=canvas.xview)
+        canvas.configure(yscrollcommand=sy.set, xscrollcommand=sx.set)
+        canvas.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        sy.pack(fill=tk.Y, side=tk.RIGHT)
+        sx.pack(fill=tk.X, side=tk.BOTTOM)
+        lbl = ttk.Label(canvas)
+        cwin = canvas.create_window((0, 0), window=lbl, anchor="nw")
+
+        def redraw(*_):
+            try:
+                if Image is None or ImageTk is None:
+                    photo = tk.PhotoImage(file=self.current_image_path)
+                else:
+                    im = Image.open(self.current_image_path)
+                    w, h = im.size
+                    ratio = max(0.2, float(scale_var.get()))
+                    im = im.resize((max(1, int(w * ratio)), max(1, int(h * ratio))))
+                    photo = ImageTk.PhotoImage(im)
+                lbl.image = photo
+                lbl.config(image=photo)
+                canvas.itemconfig(cwin, width=photo.width(), height=photo.height())
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except Exception as e:
+                messagebox.showerror("错误", f"打开图片失败: {e}")
+
+        scale_var.trace_add("write", redraw)
+        redraw()
 
     def _on_mode_change(self) -> None:
         offline = self.source_mode.get() == "offline"
@@ -609,7 +693,13 @@ class BridgeApp(tk.Tk):
             )
             self.analysis_mode.set(analysis_mode)
             show_cols = [c for c in ["bridge_name", "bridge_project_score", "avg_device_health", "avg_availability"] if c in summary.columns]
-            result = f"分析完成。模式={analysis_mode}，桥梁数={len(summary)}\n输出目录: {output_root}\n\n"
+            now_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            result = (
+                f"分析完成时间: {now_str}\n"
+                f"分析方法: {analysis_mode}\n"
+                f"桥梁数: {len(summary)}\n"
+                f"输出目录: {output_root}\n\n"
+            )
             if show_cols:
                 result += summary[show_cols].to_string(index=False)
             self._set_result(result)
