@@ -204,7 +204,6 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
                 continue
             ax.plot(t_raw.iloc[:n], raw_series.iloc[:n], lw=0.8, alpha=0.5, label="Raw")
             ax.plot(t_clean.iloc[:n], clean_series.iloc[:n], lw=1.1, label="Cleaned")
-            ax.set_title(f"{s}: 原始 vs 修复", fontsize=14)
             ax.tick_params(labelsize=12)
             ax.grid(alpha=0.25)
         axes[0].legend(loc="upper right", fontsize=11)
@@ -217,7 +216,6 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
     worst = health.head(min(12, len(health)))
     ax.barh(worst["sensor_name"], worst["project_score"])
     ax.invert_yaxis()
-    ax.set_title("风险最高传感器", fontsize=14)
     ax.set_xlabel("project_score", fontsize=12)
     ax.tick_params(labelsize=12)
     ax.grid(axis="x", alpha=0.25)
@@ -323,7 +321,6 @@ def _plot_multi_bridge_compare(summary: pd.DataFrame, output_root: str) -> None:
     plot_df = summary[["bridge_name"] + cols].set_index("bridge_name")
     fig, ax = plt.subplots(figsize=(12, 5))
     plot_df.plot(kind="bar", ax=ax, rot=25)
-    ax.set_title("多桥对比结果")
     ax.set_ylabel("Score")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()

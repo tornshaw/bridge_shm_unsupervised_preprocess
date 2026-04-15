@@ -993,7 +993,6 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 1) 训练损失曲线
         fig, ax = plt.subplots(figsize=(7.2, 4.2))
         ax.plot(np.arange(1, len(self.artifacts.training_loss_history) + 1), self.artifacts.training_loss_history, linewidth=2.0)
-        ax.set_title("训练损失曲线 Training Loss", fontsize=13)
         ax.set_xlabel("Epoch", fontsize=12)
         ax.set_ylabel("Loss", fontsize=12)
         ax.grid(alpha=0.25)
@@ -1009,7 +1008,6 @@ class BridgeSHMUnsupervisedPreprocessor:
 
         fig, ax = plt.subplots(figsize=(8.6, 7.2))
         im = ax.imshow(adj, aspect="auto", cmap="magma", vmin=p_low, vmax=p_high)
-        ax.set_title("传感器邻接热力图 Sensor Adjacency", fontsize=13)
         ax.set_xlabel("传感器索引", fontsize=12)
         ax.set_ylabel("传感器索引", fontsize=12)
         top_thr = float(np.nanpercentile(adj, 99.5))
@@ -1030,7 +1028,6 @@ class BridgeSHMUnsupervisedPreprocessor:
             s_high = float(np.nanmax(score_values) + 1e-6)
         fig, ax = plt.subplots(figsize=(12.5, 6.2))
         im = ax.imshow(score_values, aspect="auto", cmap="turbo", vmin=s_low, vmax=s_high)
-        ax.set_title("异常分数热力图 Anomaly Score", fontsize=13)
         ax.set_xlabel("时间", fontsize=12)
         ax.set_ylabel("传感器", fontsize=12)
         ax.set_yticks(np.arange(len(self.artifacts.sensor_names)))
@@ -1048,7 +1045,6 @@ class BridgeSHMUnsupervisedPreprocessor:
         sensor_name = worst_health["sensor_name"]
         ax.barh(sensor_name, worst_health["project_score"])
         ax.invert_yaxis()
-        ax.set_title("风险最高传感器（综合分最低）", fontsize=13)
         ax.set_xlabel("综合分 Project Score", fontsize=12)
         ax.set_xlim(0, 100)
         ax.grid(axis="x", alpha=0.25)
@@ -1057,7 +1053,6 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 5) 逐时刻异常计数曲线
         fig, ax1 = plt.subplots(figsize=(11, 4.8))
         ax1.plot(timestamps, point_status_df["abnormal_count"], linewidth=1.8, label="Abnormal count")
-        ax1.set_title("每日异常通道数量", fontsize=13)
         ax1.set_xlabel("时间", fontsize=12)
         ax1.set_ylabel("异常传感器数", fontsize=12)
         ax1.grid(alpha=0.25)
@@ -1106,8 +1101,7 @@ class BridgeSHMUnsupervisedPreprocessor:
                 if np.any(mask):
                     ax.scatter(ts_array[mask], cleaned_series[mask], s=14, c=color, label=lb, alpha=0.85)
 
-            ax.set_title(f"{sensor}: 原始值 vs 修复值")
-            ax.set_ylabel("数值")
+            ax.set_ylabel(f"{sensor}\n数值")
             ax.grid(alpha=0.22)
 
         style_time_axis(axes[-1], timestamps)
@@ -1122,9 +1116,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         n_all = len(all_sensors)
         if n_all > 0:
             fig_h = max(8.0, 0.34 * n_all + 3.8)
-            fig, (ax_left, ax_bottom) = plt.subplots(
-                1, 2, figsize=(32, fig_h), gridspec_kw={"width_ratios": [1.0, 1.0], "wspace": 0.16}
-            )
+            fig_w = 16
+            fig_left, ax_left = plt.subplots(figsize=(fig_w, fig_h))
+            fig_bottom, ax_bottom = plt.subplots(figsize=(fig_w, fig_h))
             time_num = mdates.date2num(pd.to_datetime(timestamps))
             if np.any(np.isfinite(time_num)):
                 xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
@@ -1147,7 +1141,6 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_left.set_yticks(np.arange(1, n_all + 1))
             ax_left.set_yticklabels(all_sensors, fontsize=11)
             ax_left.set_ylabel("传感器", fontsize=13)
-            ax_left.set_title("全通道原始时程", fontsize=16)
             for y in np.arange(0.5, n_all + 1.5, 1.0):
                 ax_left.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=0)
             ax_left.set_ylim(0.5, n_all + 0.5)
@@ -1214,7 +1207,6 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_bottom.set_yticks(np.arange(1, n_all + 1))
             ax_bottom.set_yticklabels(all_sensors, fontsize=11)
             ax_bottom.set_ylabel("传感器", fontsize=13)
-            ax_bottom.set_title("异常状态矩阵 Sensor Status", fontsize=16, pad=42)
             for y in np.arange(0.5, n_all + 1.5, 1.0):
                 ax_bottom.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=3)
             ax_bottom.set_facecolor("white")
@@ -1229,10 +1221,10 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_bottom.legend(
                 handles=handles,
                 loc="upper center",
-                bbox_to_anchor=(0.5, 1.01),
+                bbox_to_anchor=(0.5, 1.22),
                 ncol=4,
                 frameon=True,
-                fontsize=11,
+                fontsize=13,
                 columnspacing=0.8,
                 handlelength=1.8,
             )
@@ -1243,7 +1235,7 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_left.xaxis.set_major_formatter(major_formatter)
             ax_bottom.xaxis.set_major_locator(major_locator)
             ax_bottom.xaxis.set_major_formatter(major_formatter)
-            fig.canvas.draw()
+            fig_left.canvas.draw()
             xticks = ax_left.get_xticks()
             for xt in xticks:
                 ax_left.axvline(xt, color="black", lw=0.6, zorder=0)
@@ -1251,10 +1243,8 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_left.set_xlim(xmin, xmax)
             ax_bottom.set_xlabel("时间", fontsize=13)
             ax_left.set_xlabel("时间", fontsize=13)
-            ax_left.text(-0.08, 1.02, "(a)", transform=ax_left.transAxes, fontsize=15, fontweight="bold")
-            ax_bottom.text(-0.08, 1.02, "(b)", transform=ax_bottom.transAxes, fontsize=15, fontweight="bold")
-
-            save_and_track(fig, "all_channels_status_overview.png")
+            save_and_track(fig_left, "all_channels_raw_overview.png")
+            save_and_track(fig_bottom, "all_channels_status_overview.png")
 
         # 8) 潜空间散点图
         x_raw = sensor_df.to_numpy(dtype=float)
@@ -1299,7 +1289,6 @@ class BridgeSHMUnsupervisedPreprocessor:
                 label="Abnormal window",
             )
             ax.legend(loc="best")
-        ax.set_title("Latent Window Distribution")
         ax.set_xlabel("Latent Axis 1")
         ax.set_ylabel("Latent Axis 2")
         ax.grid(alpha=0.25)
