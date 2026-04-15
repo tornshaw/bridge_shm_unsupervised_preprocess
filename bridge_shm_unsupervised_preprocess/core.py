@@ -59,6 +59,7 @@ from torch.utils.data import DataLoader, TensorDataset
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "FangSong", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["font.size"] = 12
 
 
 KNOWN_IOT_START = dt.datetime(2026, 1, 25)
@@ -228,7 +229,7 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def save_figure(fig: plt.Figure, path: str, dpi: int = 160) -> None:
+def save_figure(fig: plt.Figure, path: str, dpi: int = 320) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -1134,12 +1135,15 @@ class BridgeSHMUnsupervisedPreprocessor:
             # (a) 左图：全通道原始曲线（按通道偏移）
             raw_mat = sensor_df[all_sensors].to_numpy(dtype=float).T
             med = np.nanmedian(raw_mat, axis=1, keepdims=True)
-            mad = np.nanmedian(np.abs(raw_mat - med), axis=1, keepdims=True) + 1e-6
-            norm_raw = (raw_mat - med) / mad
+            q05 = np.nanpercentile(raw_mat, 5, axis=1, keepdims=True)
+            q95 = np.nanpercentile(raw_mat, 95, axis=1, keepdims=True)
+            scale = np.maximum(q95 - q05, 1e-6)
+            norm_raw = (raw_mat - med) / scale
+            norm_raw = np.clip(norm_raw, -1.0, 1.0)
             offset = np.arange(1, n_all + 1).reshape(-1, 1)
-            display_raw = norm_raw * 0.35 + offset
+            display_raw = norm_raw * 0.45 + offset
             for i in range(n_all):
-                ax_left.plot(time_num, display_raw[i], "-", lw=0.7, alpha=0.85, color="#2f2f2f")
+                ax_left.plot(time_num, display_raw[i], "-", lw=0.8, alpha=0.9, color="#1f5bb5")
             ax_left.set_yticks(np.arange(1, n_all + 1))
             ax_left.set_yticklabels(all_sensors, fontsize=11)
             ax_left.set_ylabel("传感器", fontsize=13)

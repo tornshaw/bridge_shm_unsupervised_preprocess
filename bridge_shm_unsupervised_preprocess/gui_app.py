@@ -228,6 +228,8 @@ class BridgeApp(tk.Tk):
         table_scroll_x = ttk.Scrollbar(table_wrap, orient=tk.HORIZONTAL, command=self.summary_table.xview)
         self.summary_table.configure(yscrollcommand=table_scroll_y.set, xscrollcommand=table_scroll_x.set)
         self.summary_table.grid(row=0, column=0, sticky="nsew")
+        self.summary_table.bind("<Double-1>", self._on_summary_table_double_click)
+        self.summary_table.bind("<Button-1>", self._on_summary_table_click, add="+")
         table_scroll_y.grid(row=0, column=1, sticky="ns")
         table_scroll_x.grid(row=1, column=0, sticky="ew")
         table_wrap.rowconfigure(0, weight=1)
@@ -285,7 +287,7 @@ class BridgeApp(tk.Tk):
         return "break"
 
     @staticmethod
-    def _to_chinese_summary(summary: pd.DataFrame, analysis_time: str, method: str) -> pd.DataFrame:
+    def _to_chinese_summary(summary: pd.DataFrame, analysis_time: str, method: str, output_dir: str) -> pd.DataFrame:
         rename_map = {
             "bridge_name": "桥名",
             "samples": "样本数",
@@ -298,8 +300,10 @@ class BridgeApp(tk.Tk):
             "bridge_project_score": "桥梁传感器总分数",
         }
         out = summary.copy()
-        out.insert(0, "分析时间", analysis_time)
-        out.insert(1, "分析方法", method)
+        out.insert(0, "查看", "打开")
+        out.insert(1, "分析时间", analysis_time)
+        out.insert(2, "分析方法", method)
+        out["输出目录"] = output_dir
         out = out.rename(columns=rename_map)
         return out
 
@@ -317,6 +321,33 @@ class BridgeApp(tk.Tk):
             self.summary_table.column(c, width=120, anchor="center")
         for _, row in summary.iterrows():
             self.summary_table.insert("", tk.END, values=[row.get(c, "") for c in cols])
+
+    def _open_history_record(self, item_id: str) -> None:
+        if not item_id:
+            return
+        vals = self.summary_table.item(item_id, "values")
+        cols = list(self.summary_table["columns"])
+        if not vals or "输出目录" not in cols:
+            return
+        output_dir = vals[cols.index("输出目录")]
+        bridge_name = vals[cols.index("桥名")] if "桥名" in cols else None
+        if output_dir and os.path.isdir(str(output_dir)):
+            self._load_result_images(output_root=str(output_dir), bridge_name=str(bridge_name) if bridge_name else None)
+            self.last_analysis_output_dir = str(output_dir)
+            messagebox.showinfo("历史结果", f"已加载历史分析记录图片。\n目录: {output_dir}")
+
+    def _on_summary_table_double_click(self, _event=None) -> None:
+        item = self.summary_table.focus()
+        self._open_history_record(item)
+
+    def _on_summary_table_click(self, event) -> None:
+        region = self.summary_table.identify_region(event.x, event.y)
+        if region != "cell":
+            return
+        item = self.summary_table.identify_row(event.y)
+        col = self.summary_table.identify_column(event.x)
+        if col == "#1":  # “查看”列
+            self._open_history_record(item)
 
     def _load_result_images(self, output_root: str, bridge_name: Optional[str] = None) -> None:
         target_dir = output_root
@@ -409,9 +440,17 @@ class BridgeApp(tk.Tk):
                 scale_var.set(max(0.2, float(scale_var.get()) / 1.1))
             return "break"
 
+        def on_wheel_scroll(event):
+            delta = int(-1 * (event.delta / 120))
+            canvas.yview_scroll(delta, "units")
+            return "break"
+
         self._bind_mousewheel(canvas, canvas)
         canvas.bind("<Enter>", lambda _e: canvas.focus_set())
         canvas.bind("<Control-MouseWheel>", on_ctrl_wheel, add="+")
+        canvas.bind("<MouseWheel>", on_wheel_scroll, add="+")
+        win.bind("<Control-MouseWheel>", on_ctrl_wheel)
+        win.bind("<MouseWheel>", on_wheel_scroll)
         scale_var.trace_add("write", redraw)
         redraw()
 
@@ -832,7 +871,12 @@ class BridgeApp(tk.Tk):
             )
             self.analysis_mode.set(analysis_mode)
             now_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-            cn_summary = self._to_chinese_summary(summary, analysis_time=now_str, method=analysis_mode)
+            cn_summary = self._to_chinese_summary(
+                summary,
+                analysis_time=now_str,
+                method=analysis_mode,
+                output_dir=session_output_root,
+            )
             self.history_table_df = pd.concat([self.history_table_df, cn_summary], ignore_index=True)
             result = (
                 f"分析完成时间: {now_str}\n"

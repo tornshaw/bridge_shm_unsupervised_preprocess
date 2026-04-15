@@ -209,7 +209,7 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
             ax.grid(alpha=0.25)
         axes[0].legend(loc="upper right", fontsize=11)
         fig.tight_layout()
-        fig.savefig(os.path.join(output_dir, "raw_vs_cleaned_top_sensors.png"), dpi=160)
+        fig.savefig(os.path.join(output_dir, "raw_vs_cleaned_top_sensors.png"), dpi=320)
         plt.close(fig)
 
     # health
@@ -222,7 +222,7 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
     ax.tick_params(labelsize=12)
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
-    fig.savefig(os.path.join(output_dir, "sensor_health_barh.png"), dpi=160)
+    fig.savefig(os.path.join(output_dir, "sensor_health_barh.png"), dpi=320)
     plt.close(fig)
 
 
