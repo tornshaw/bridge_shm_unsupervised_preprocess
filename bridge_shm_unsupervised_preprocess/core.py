@@ -1116,17 +1116,14 @@ class BridgeSHMUnsupervisedPreprocessor:
         axes[-1].set_xlabel("时间")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
+        # 7) 全通道时程图 + 异常状态矩阵（左右对照图）
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
         if n_all > 0:
-            fig_h = max(9.0, 1.15 * n_all + 4.8)
-            fig = plt.figure(figsize=(16, fig_h))
-            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
-            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
-            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
-            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
-
+            fig_h = max(10.0, 0.55 * n_all + 5.0)
+            fig, (ax_left, ax_bottom) = plt.subplots(
+                1, 2, figsize=(22, fig_h), gridspec_kw={"width_ratios": [1.0, 1.0]}
+            )
             time_num = mdates.date2num(pd.to_datetime(timestamps))
             if np.any(np.isfinite(time_num)):
                 xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
@@ -1134,25 +1131,31 @@ class BridgeSHMUnsupervisedPreprocessor:
                 xmin, xmax = 0.0, float(len(timestamps) - 1)
                 time_num = np.arange(len(timestamps), dtype=float)
 
-            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
-            for i, sensor in enumerate(all_sensors):
-                raw_series = sensor_df[sensor].to_numpy(dtype=float)
-                clean_series = cleaned_df[sensor].to_numpy(dtype=float)
-                ax = top_axes[i]
-                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
-                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
-                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
-                ax.grid(True, axis="y", alpha=0.12)
-                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
-                for sp in ax.spines.values():
-                    sp.set_linewidth(0.9)
-                if i < n_all - 1:
-                    ax.tick_params(axis="x", labelbottom=False)
-                if i == 0:
-                    ax.set_title("全通道时程（按通道分子图）Raw/Cleaned")
-                    ax.legend(loc="upper right", fontsize=7, ncol=2)
+            # (a) 左图：全通道清洗后数值热力图
+            clean_mat = cleaned_df[all_sensors].to_numpy(dtype=float).T
+            c_low, c_high = np.nanpercentile(clean_mat, [2, 98])
+            if not np.isfinite(c_low):
+                c_low = float(np.nanmin(clean_mat))
+            if not np.isfinite(c_high) or c_high <= c_low:
+                c_high = float(np.nanmax(clean_mat) + 1e-6)
+            im_left = ax_left.imshow(
+                clean_mat,
+                aspect="auto",
+                interpolation="nearest",
+                cmap="viridis",
+                vmin=c_low,
+                vmax=c_high,
+                extent=[xmin, xmax, 0.5, n_all + 0.5],
+                origin="lower",
+            )
+            ax_left.set_yticks(np.arange(1, n_all + 1))
+            ax_left.set_yticklabels(all_sensors, fontsize=9)
+            ax_left.set_ylabel("传感器", fontsize=11)
+            ax_left.set_title("全通道时程（清洗后）", fontsize=13)
+            ax_left.grid(True, axis="x", alpha=0.22, linestyle="--")
+            fig.colorbar(im_left, ax=ax_left, fraction=0.046, pad=0.04, label="Cleaned value")
 
-            # (b) 底图：离散异常状态矩阵
+            # (b) 右图：离散异常状态矩阵（底图高度视觉增强）
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
             status_order = [
                 "normal",
@@ -1208,9 +1211,9 @@ class BridgeSHMUnsupervisedPreprocessor:
                 origin="lower",
             )
             ax_bottom.set_yticks(np.arange(1, n_all + 1))
-            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
-            ax_bottom.set_ylabel("传感器")
-            ax_bottom.set_title("异常状态矩阵 Sensor Status")
+            ax_bottom.set_yticklabels(all_sensors, fontsize=9)
+            ax_bottom.set_ylabel("传感器", fontsize=11)
+            ax_bottom.set_title("异常状态矩阵 Sensor Status", fontsize=13, pad=22)
             ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
             for sp in ax_bottom.spines.values():
                 sp.set_linewidth(1.0)
@@ -1221,21 +1224,22 @@ class BridgeSHMUnsupervisedPreprocessor:
             ]
             ax_bottom.legend(
                 handles=handles,
-                loc="upper left",
-                bbox_to_anchor=(0.0, 1.22),
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.04),
                 ncol=4,
                 frameon=True,
-                fontsize=8,
+                fontsize=9,
                 columnspacing=0.8,
                 handlelength=1.8,
             )
 
-            style_time_axis(top_axes[-1], timestamps)
+            style_time_axis(ax_left, timestamps)
             style_time_axis(ax_bottom, timestamps)
-            top_axes[-1].set_xlim(xmin, xmax)
+            ax_left.set_xlim(xmin, xmax)
             ax_bottom.set_xlabel("时间")
-            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
-            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+            ax_left.set_xlabel("时间")
+            ax_left.text(-0.08, 1.02, "(a)", transform=ax_left.transAxes, fontsize=13, fontweight="bold")
+            ax_bottom.text(-0.08, 1.02, "(b)", transform=ax_bottom.transAxes, fontsize=13, fontweight="bold")
 
             save_and_track(fig, "all_channels_status_overview.png")
 

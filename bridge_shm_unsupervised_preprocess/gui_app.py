@@ -66,6 +66,7 @@ class BridgeApp(tk.Tk):
         self.node_raw_text: Dict[str, str] = {}
         self.image_zoom: float = 1.0
         self.last_analysis_output_dir: Optional[str] = None
+        self.history_table_df = pd.DataFrame()
 
         self._build_ui()
 
@@ -198,8 +199,11 @@ class BridgeApp(tk.Tk):
         self.image_canvas_window = self.image_canvas.create_window((0, 0), window=self.image_label, anchor="nw")
         self.image_label.bind("<Configure>", lambda _e: self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all")))
         self.image_canvas.bind("<Configure>", lambda _e: self._render_current_image())
+        self.image_canvas.bind("<Enter>", lambda _e: self.image_canvas.focus_set())
+        self.image_label.bind("<Enter>", lambda _e: self.image_canvas.focus_set())
         self.bridge_tree.bind("<Button-1>", self._on_tree_click, add="+")
         self.image_canvas.bind("<Control-MouseWheel>", self._on_image_zoom_wheel)
+        self.image_label.bind("<Control-MouseWheel>", self._on_image_zoom_wheel)
         self._bind_mousewheel(self.bridge_tree, self.bridge_tree)
         self._bind_mousewheel(self.image_canvas, self.image_canvas)
 
@@ -233,9 +237,10 @@ class BridgeApp(tk.Tk):
         self._bind_mousewheel(self.result_text, self.result_text)
         self._on_mode_change()
 
-    def _set_result(self, text: str) -> None:
+    def _set_result(self, text: str, append: bool = False) -> None:
         self.result_text.configure(state=tk.NORMAL)
-        self.result_text.delete("1.0", tk.END)
+        if not append:
+            self.result_text.delete("1.0", tk.END)
         self.result_text.insert(tk.END, text)
         self.result_text.configure(state=tk.DISABLED)
 
@@ -266,6 +271,25 @@ class BridgeApp(tk.Tk):
             self.image_zoom = max(0.3, self.image_zoom / 1.1)
         self._render_current_image()
         return "break"
+
+    @staticmethod
+    def _to_chinese_summary(summary: pd.DataFrame, analysis_time: str, method: str) -> pd.DataFrame:
+        rename_map = {
+            "bridge_name": "桥名",
+            "samples": "样本数",
+            "sensor_count": "传感器数量",
+            "total_missing_ratio": "总缺失比例",
+            "system_missing_ratio": "系统缺失比例",
+            "device_missing_ratio": "设备缺失比例",
+            "avg_device_health": "平均设备健康指数",
+            "avg_availability": "平均系统可用性",
+            "bridge_project_score": "桥梁传感器总分数",
+        }
+        out = summary.copy()
+        out.insert(0, "分析时间", analysis_time)
+        out.insert(1, "分析方法", method)
+        out = out.rename(columns=rename_map)
+        return out
 
     def _show_summary_table(self, summary: pd.DataFrame) -> None:
         for c in self.summary_table["columns"]:
@@ -374,6 +398,7 @@ class BridgeApp(tk.Tk):
             return "break"
 
         self._bind_mousewheel(canvas, canvas)
+        canvas.bind("<Enter>", lambda _e: canvas.focus_set())
         canvas.bind("<Control-MouseWheel>", on_ctrl_wheel, add="+")
         scale_var.trace_add("write", redraw)
         redraw()
@@ -674,11 +699,12 @@ class BridgeApp(tk.Tk):
         target = self.last_analysis_output_dir
         if target and os.path.exists(target):
             shutil.rmtree(target, ignore_errors=True)
-        self._show_summary_table(pd.DataFrame())
+        self.history_table_df = pd.DataFrame()
+        self._show_summary_table(self.history_table_df)
         self.result_images = []
         self.image_zoom = 1.0
         self._render_current_image()
-        self._set_result("分析结果已清除。\n")
+        self._set_result("分析结果已清除。\n", append=False)
         messagebox.showinfo("成功", f"已清理当次分析结果目录: {target or '无'}")
 
     def _run(self, analysis_mode: str) -> None:
@@ -744,18 +770,19 @@ class BridgeApp(tk.Tk):
                 sample_days=sample_days,
             )
             self.analysis_mode.set(analysis_mode)
-            show_cols = [c for c in ["bridge_name", "bridge_project_score", "avg_device_health", "avg_availability"] if c in summary.columns]
             now_str = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+            cn_summary = self._to_chinese_summary(summary, analysis_time=now_str, method=analysis_mode)
+            self.history_table_df = pd.concat([self.history_table_df, cn_summary], ignore_index=True)
             result = (
                 f"分析完成时间: {now_str}\n"
                 f"分析方法: {analysis_mode}\n"
                 f"桥梁数: {len(summary)}\n"
                 f"输出目录: {session_output_root}\n\n"
             )
-            if show_cols:
-                result += summary[show_cols].to_string(index=False)
-            self._set_result(result)
-            self._show_summary_table(summary)
+            result += cn_summary.to_string(index=False)
+            result += "\n\n" + ("-" * 80) + "\n"
+            self._set_result(result, append=True)
+            self._show_summary_table(self.history_table_df)
             first_bridge = summary.iloc[0]["bridge_name"] if not summary.empty and "bridge_name" in summary.columns else None
             self._load_result_images(output_root=session_output_root, bridge_name=first_bridge)
             self.last_analysis_output_dir = session_output_root
