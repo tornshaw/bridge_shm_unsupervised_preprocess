@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "FangSong", "DejaVu Sans"]
+plt.rcParams["axes.unicode_minus"] = False
+
 
 @dataclass
 class BridgeAnalysisTask:
@@ -182,7 +186,8 @@ def _basic_preprocess_no_torch(df: pd.DataFrame, bridge_name: str) -> Dict[str, 
 
 def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame], output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
-    t, _ = _infer_time_column(df)
+    t_raw, _ = _infer_time_column(df)
+    t_clean = pd.to_datetime(outputs["cleaned_data"].iloc[:, 0], errors="coerce")
     health = outputs["sensor_health_summary"]
     top = health["sensor_name"].head(min(4, len(health))).tolist()
 
@@ -192,13 +197,18 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
         if len(top) == 1:
             axes = [axes]
         for ax, s in zip(axes, top):
-            ax.plot(t, pd.to_numeric(df[s], errors="coerce"), lw=0.8, alpha=0.5, label="Raw")
-            ax.plot(t, outputs["cleaned_data"][s], lw=1.1, label="Cleaned")
-            ax.set_title(f"{s}: 原始 vs 修复")
+            raw_series = pd.to_numeric(df[s], errors="coerce")
+            clean_series = pd.to_numeric(outputs["cleaned_data"][s], errors="coerce")
+            n = min(len(raw_series), len(clean_series), len(t_raw), len(t_clean))
+            if n < 2:
+                continue
+            ax.plot(t_raw.iloc[:n], raw_series.iloc[:n], lw=0.8, alpha=0.5, label="Raw")
+            ax.plot(t_clean.iloc[:n], clean_series.iloc[:n], lw=1.1, label="Cleaned")
+            ax.tick_params(labelsize=12)
             ax.grid(alpha=0.25)
-        axes[0].legend(loc="upper right")
+        axes[0].legend(loc="upper right", fontsize=11)
         fig.tight_layout()
-        fig.savefig(os.path.join(output_dir, "raw_vs_cleaned_top_sensors.png"), dpi=160)
+        fig.savefig(os.path.join(output_dir, "raw_vs_cleaned_top_sensors.png"), dpi=320)
         plt.close(fig)
 
     # health
@@ -206,11 +216,11 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
     worst = health.head(min(12, len(health)))
     ax.barh(worst["sensor_name"], worst["project_score"])
     ax.invert_yaxis()
-    ax.set_title("风险最高传感器")
-    ax.set_xlabel("project_score")
+    ax.set_xlabel("project_score", fontsize=12)
+    ax.tick_params(labelsize=12)
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
-    fig.savefig(os.path.join(output_dir, "sensor_health_barh.png"), dpi=160)
+    fig.savefig(os.path.join(output_dir, "sensor_health_barh.png"), dpi=320)
     plt.close(fig)
 
 
@@ -260,10 +270,12 @@ def run_single_bridge_task(
     if analysis_mode == "普通预处理分析":
         _save_basic_visualizations(df, outputs, bridge_out)
     else:
-        from .core import BridgeSHMUnsupervisedPreprocessor  # noqa: F401
-        # 高级模式下可视化依旧由 core 生成，避免重复逻辑
-        # 这里通过再次实例化成本较高，直接调用基础可视化兜底
-        _save_basic_visualizations(df, outputs, bridge_out)
+        # 高级模式下优先输出 core 的完整图件（热力图/全通道状态图/潜空间等）
+        try:
+            pre.save_visualizations(df, outputs, bridge_out, plot_top_k=4)  # type: ignore[name-defined]
+        except Exception:
+            # 若完整图件生成失败，退化到基础图件，保证流程不中断
+            _save_basic_visualizations(df, outputs, bridge_out)
 
     return outputs
 
@@ -309,7 +321,6 @@ def _plot_multi_bridge_compare(summary: pd.DataFrame, output_root: str) -> None:
     plot_df = summary[["bridge_name"] + cols].set_index("bridge_name")
     fig, ax = plt.subplots(figsize=(12, 5))
     plot_df.plot(kind="bar", ax=ax, rot=25)
-    ax.set_title("多桥对比结果")
     ax.set_ylabel("Score")
     ax.grid(axis="y", alpha=0.3)
     fig.tight_layout()

@@ -40,7 +40,7 @@ python -m pip install -U pip setuptools wheel
 if errorlevel 1 goto :fail
 
 echo [4/7] 安装依赖（含 CPU 版 torch）...
-python -m pip install -U pyinstaller pandas numpy matplotlib scikit-learn openpyxl
+python -m pip install -U pyinstaller pandas numpy matplotlib scikit-learn openpyxl pymysql
 if errorlevel 1 goto :fail
 python -m pip install -U torch --index-url https://download.pytorch.org/whl/cpu
 if errorlevel 1 goto :fail
