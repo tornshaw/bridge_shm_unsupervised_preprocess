@@ -654,8 +654,8 @@ class BridgeApp(tk.Tk):
         parent = self.bridge_tree.parent(node)
         while parent:
             siblings = self.bridge_tree.get_children(parent)
-            all_checked = all(self.node_checked.get(ch, False) for ch in siblings) if siblings else False
-            self._set_node_checked(parent, all_checked)
+            any_checked = any(self.node_checked.get(ch, False) for ch in siblings) if siblings else False
+            self._set_node_checked(parent, any_checked)
             parent = self.bridge_tree.parent(parent)
         self.bridge_tree.selection_set(node)
         self._update_selected_info()
@@ -665,14 +665,17 @@ class BridgeApp(tk.Tk):
         total_bridges = 0
         total_sensors = 0
         for node, bridge in self.tree_to_bridge.items():
-            if not self.node_checked.get(node, False):
-                continue
-            total_bridges += 1
             n = 0
             for ind in self.bridge_tree.get_children(node):
                 for leaf in self.bridge_tree.get_children(ind):
                     if self.node_checked.get(leaf, False):
                         n += 1
+            if n == 0 and self.node_checked.get(node, False):
+                # 兜底：桥节点被选中但叶子未同步时，按全设备统计
+                n = sum(len(self.bridge_tree.get_children(ind)) for ind in self.bridge_tree.get_children(node))
+            if n == 0:
+                continue
+            total_bridges += 1
             total_sensors += n
             lines.append(f"{bridge}: {n} 个设备")
         if not lines:
@@ -730,16 +733,19 @@ class BridgeApp(tk.Tk):
         roots: Dict[str, str] = {}
         picked_sensors: Dict[str, List[str]] = {}
         for root, bridge in self.tree_to_bridge.items():
-            if not self.node_checked.get(root, False):
-                continue
-            roots[root] = bridge
+            leaf_selected: List[str] = []
             for ind in self.bridge_tree.get_children(root):
                 for leaf in self.bridge_tree.get_children(ind):
                     if self.node_checked.get(leaf, False):
                         sensor_name = self.node_sensor_id.get(leaf, "").strip()
-                        picked_sensors.setdefault(bridge, [])
-                        if sensor_name and sensor_name not in picked_sensors[bridge]:
-                            picked_sensors[bridge].append(sensor_name)
+                        if sensor_name and sensor_name not in leaf_selected:
+                            leaf_selected.append(sensor_name)
+            # 关键修复：允许仅勾选“监测指标”或“部分测点”即视为选中当前桥
+            if leaf_selected:
+                roots[root] = bridge
+                picked_sensors[bridge] = leaf_selected
+            elif self.node_checked.get(root, False):
+                roots[root] = bridge
 
         idxs: List[int] = []
         for bridge in roots.values():
