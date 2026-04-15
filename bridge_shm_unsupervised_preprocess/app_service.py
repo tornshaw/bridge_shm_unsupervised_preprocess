@@ -182,7 +182,8 @@ def _basic_preprocess_no_torch(df: pd.DataFrame, bridge_name: str) -> Dict[str, 
 
 def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame], output_dir: str) -> None:
     os.makedirs(output_dir, exist_ok=True)
-    t, _ = _infer_time_column(df)
+    t_raw, _ = _infer_time_column(df)
+    t_clean = pd.to_datetime(outputs["cleaned_data"].iloc[:, 0], errors="coerce")
     health = outputs["sensor_health_summary"]
     top = health["sensor_name"].head(min(4, len(health))).tolist()
 
@@ -192,8 +193,13 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
         if len(top) == 1:
             axes = [axes]
         for ax, s in zip(axes, top):
-            ax.plot(t, pd.to_numeric(df[s], errors="coerce"), lw=0.8, alpha=0.5, label="Raw")
-            ax.plot(t, outputs["cleaned_data"][s], lw=1.1, label="Cleaned")
+            raw_series = pd.to_numeric(df[s], errors="coerce")
+            clean_series = pd.to_numeric(outputs["cleaned_data"][s], errors="coerce")
+            n = min(len(raw_series), len(clean_series), len(t_raw), len(t_clean))
+            if n < 2:
+                continue
+            ax.plot(t_raw.iloc[:n], raw_series.iloc[:n], lw=0.8, alpha=0.5, label="Raw")
+            ax.plot(t_clean.iloc[:n], clean_series.iloc[:n], lw=1.1, label="Cleaned")
             ax.set_title(f"{s}: 原始 vs 修复")
             ax.grid(alpha=0.25)
         axes[0].legend(loc="upper right")
@@ -260,10 +266,12 @@ def run_single_bridge_task(
     if analysis_mode == "普通预处理分析":
         _save_basic_visualizations(df, outputs, bridge_out)
     else:
-        from .core import BridgeSHMUnsupervisedPreprocessor  # noqa: F401
-        # 高级模式下可视化依旧由 core 生成，避免重复逻辑
-        # 这里通过再次实例化成本较高，直接调用基础可视化兜底
-        _save_basic_visualizations(df, outputs, bridge_out)
+        # 高级模式下优先输出 core 的完整图件（热力图/全通道状态图/潜空间等）
+        try:
+            pre.save_visualizations(df, outputs, bridge_out, plot_top_k=4)  # type: ignore[name-defined]
+        except Exception:
+            # 若完整图件生成失败，退化到基础图件，保证流程不中断
+            _save_basic_visualizations(df, outputs, bridge_out)
 
     return outputs
 
