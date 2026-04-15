@@ -59,6 +59,7 @@ from torch.utils.data import DataLoader, TensorDataset
 plt.rcParams["font.family"] = "sans-serif"
 plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "FangSong", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
+plt.rcParams["font.size"] = 12
 
 
 KNOWN_IOT_START = dt.datetime(2026, 1, 25)
@@ -228,7 +229,7 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def save_figure(fig: plt.Figure, path: str, dpi: int = 160) -> None:
+def save_figure(fig: plt.Figure, path: str, dpi: int = 320) -> None:
     fig.tight_layout()
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -992,9 +993,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 1) 训练损失曲线
         fig, ax = plt.subplots(figsize=(7.2, 4.2))
         ax.plot(np.arange(1, len(self.artifacts.training_loss_history) + 1), self.artifacts.training_loss_history, linewidth=2.0)
-        ax.set_title("训练损失曲线 Training Loss")
-        ax.set_xlabel("Epoch")
-        ax.set_ylabel("Loss")
+        ax.set_title("训练损失曲线 Training Loss", fontsize=13)
+        ax.set_xlabel("Epoch", fontsize=12)
+        ax.set_ylabel("Loss", fontsize=12)
         ax.grid(alpha=0.25)
         save_and_track(fig, "training_loss_curve.png")
 
@@ -1008,9 +1009,9 @@ class BridgeSHMUnsupervisedPreprocessor:
 
         fig, ax = plt.subplots(figsize=(8.6, 7.2))
         im = ax.imshow(adj, aspect="auto", cmap="magma", vmin=p_low, vmax=p_high)
-        ax.set_title("传感器邻接热力图 Sensor Adjacency")
-        ax.set_xlabel("传感器索引")
-        ax.set_ylabel("传感器索引")
+        ax.set_title("传感器邻接热力图 Sensor Adjacency", fontsize=13)
+        ax.set_xlabel("传感器索引", fontsize=12)
+        ax.set_ylabel("传感器索引", fontsize=12)
         top_thr = float(np.nanpercentile(adj, 99.5))
         idx = np.argwhere(adj >= top_thr)
         if len(idx) > 0:
@@ -1029,9 +1030,9 @@ class BridgeSHMUnsupervisedPreprocessor:
             s_high = float(np.nanmax(score_values) + 1e-6)
         fig, ax = plt.subplots(figsize=(12.5, 6.2))
         im = ax.imshow(score_values, aspect="auto", cmap="turbo", vmin=s_low, vmax=s_high)
-        ax.set_title("异常分数热力图 Anomaly Score")
-        ax.set_xlabel("时间")
-        ax.set_ylabel("传感器")
+        ax.set_title("异常分数热力图 Anomaly Score", fontsize=13)
+        ax.set_xlabel("时间", fontsize=12)
+        ax.set_ylabel("传感器", fontsize=12)
         ax.set_yticks(np.arange(len(self.artifacts.sensor_names)))
         ax.set_yticklabels(self.artifacts.sensor_names)
         lv = np.nanpercentile(score_values, [90, 95, 99])
@@ -1047,8 +1048,8 @@ class BridgeSHMUnsupervisedPreprocessor:
         sensor_name = worst_health["sensor_name"]
         ax.barh(sensor_name, worst_health["project_score"])
         ax.invert_yaxis()
-        ax.set_title("风险最高传感器（综合分最低）")
-        ax.set_xlabel("综合分 Project Score")
+        ax.set_title("风险最高传感器（综合分最低）", fontsize=13)
+        ax.set_xlabel("综合分 Project Score", fontsize=12)
         ax.set_xlim(0, 100)
         ax.grid(axis="x", alpha=0.25)
         save_and_track(fig, "sensor_health_barh.png")
@@ -1056,9 +1057,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         # 5) 逐时刻异常计数曲线
         fig, ax1 = plt.subplots(figsize=(11, 4.8))
         ax1.plot(timestamps, point_status_df["abnormal_count"], linewidth=1.8, label="Abnormal count")
-        ax1.set_title("每日异常通道数量")
-        ax1.set_xlabel("时间")
-        ax1.set_ylabel("异常传感器数")
+        ax1.set_title("每日异常通道数量", fontsize=13)
+        ax1.set_xlabel("时间", fontsize=12)
+        ax1.set_ylabel("异常传感器数", fontsize=12)
         ax1.grid(alpha=0.25)
         style_time_axis(ax1, timestamps)
 
@@ -1116,17 +1117,14 @@ class BridgeSHMUnsupervisedPreprocessor:
         axes[-1].set_xlabel("时间")
         save_and_track(fig, "raw_vs_cleaned_top_sensors.png")
 
-        # 7) 全通道时程图 + 异常状态矩阵（借鉴论文风格的上下对照图）
+        # 7) 全通道时程图 + 异常状态矩阵（左右对照图）
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
         if n_all > 0:
-            fig_h = max(9.0, 1.15 * n_all + 4.8)
-            fig = plt.figure(figsize=(16, fig_h))
-            gs = fig.add_gridspec(2, 1, height_ratios=[max(1.6, n_all * 0.2), 1.0], hspace=0.12)
-            gs_top = gs[0].subgridspec(n_all, 1, hspace=0.03)
-            top_axes = [fig.add_subplot(gs_top[i, 0]) for i in range(n_all)]
-            ax_bottom = fig.add_subplot(gs[1], sharex=top_axes[-1])
-
+            fig_h = max(8.0, 0.34 * n_all + 3.8)
+            fig, (ax_left, ax_bottom) = plt.subplots(
+                1, 2, figsize=(32, fig_h), gridspec_kw={"width_ratios": [1.0, 1.0], "wspace": 0.16}
+            )
             time_num = mdates.date2num(pd.to_datetime(timestamps))
             if np.any(np.isfinite(time_num)):
                 xmin, xmax = float(np.nanmin(time_num)), float(np.nanmax(time_num))
@@ -1134,25 +1132,31 @@ class BridgeSHMUnsupervisedPreprocessor:
                 xmin, xmax = 0.0, float(len(timestamps) - 1)
                 time_num = np.arange(len(timestamps), dtype=float)
 
-            # (a) 顶图：每个通道单独绘制，按通道上下排列（非叠加）
-            for i, sensor in enumerate(all_sensors):
-                raw_series = sensor_df[sensor].to_numpy(dtype=float)
-                clean_series = cleaned_df[sensor].to_numpy(dtype=float)
-                ax = top_axes[i]
-                ax.plot_date(time_num, raw_series, "-", lw=0.55, alpha=0.35, color="#4c72b0", label="Raw")
-                ax.plot_date(time_num, clean_series, "-", lw=0.8, alpha=0.95, color="#2f2f2f", label="Cleaned")
-                ax.grid(True, axis="x", alpha=0.2, linestyle="--")
-                ax.grid(True, axis="y", alpha=0.12)
-                ax.set_ylabel(sensor, rotation=0, labelpad=28, fontsize=7)
-                for sp in ax.spines.values():
-                    sp.set_linewidth(0.9)
-                if i < n_all - 1:
-                    ax.tick_params(axis="x", labelbottom=False)
-                if i == 0:
-                    ax.set_title("全通道时程（按通道分子图）Raw/Cleaned")
-                    ax.legend(loc="upper right", fontsize=7, ncol=2)
+            # (a) 左图：全通道原始曲线（按通道偏移）
+            raw_mat = sensor_df[all_sensors].to_numpy(dtype=float).T
+            med = np.nanmedian(raw_mat, axis=1, keepdims=True)
+            q05 = np.nanpercentile(raw_mat, 5, axis=1, keepdims=True)
+            q95 = np.nanpercentile(raw_mat, 95, axis=1, keepdims=True)
+            scale = np.maximum(q95 - q05, 1e-6)
+            norm_raw = (raw_mat - med) / scale
+            norm_raw = np.clip(norm_raw, -1.0, 1.0)
+            offset = np.arange(1, n_all + 1).reshape(-1, 1)
+            display_raw = norm_raw * 0.45 + offset
+            for i in range(n_all):
+                ax_left.plot(time_num, display_raw[i], "-", lw=0.8, alpha=0.9, color="#1f5bb5")
+            ax_left.set_yticks(np.arange(1, n_all + 1))
+            ax_left.set_yticklabels(all_sensors, fontsize=11)
+            ax_left.set_ylabel("传感器", fontsize=13)
+            ax_left.set_title("全通道原始时程", fontsize=16)
+            for y in np.arange(0.5, n_all + 1.5, 1.0):
+                ax_left.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=0)
+            ax_left.set_ylim(0.5, n_all + 0.5)
+            ax_left.set_facecolor("white")
+            for sp in ax_left.spines.values():
+                sp.set_linewidth(0.9)
+                sp.set_color("black")
 
-            # (b) 底图：离散异常状态矩阵
+            # (b) 右图：离散异常状态矩阵（底图高度视觉增强）
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
             status_order = [
                 "normal",
@@ -1208,12 +1212,15 @@ class BridgeSHMUnsupervisedPreprocessor:
                 origin="lower",
             )
             ax_bottom.set_yticks(np.arange(1, n_all + 1))
-            ax_bottom.set_yticklabels(all_sensors, fontsize=7)
-            ax_bottom.set_ylabel("传感器")
-            ax_bottom.set_title("异常状态矩阵 Sensor Status")
-            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
+            ax_bottom.set_yticklabels(all_sensors, fontsize=11)
+            ax_bottom.set_ylabel("传感器", fontsize=13)
+            ax_bottom.set_title("异常状态矩阵 Sensor Status", fontsize=16, pad=42)
+            for y in np.arange(0.5, n_all + 1.5, 1.0):
+                ax_bottom.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=3)
+            ax_bottom.set_facecolor("white")
             for sp in ax_bottom.spines.values():
-                sp.set_linewidth(1.0)
+                sp.set_linewidth(0.9)
+                sp.set_color("black")
 
             handles = [
                 plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
@@ -1221,21 +1228,31 @@ class BridgeSHMUnsupervisedPreprocessor:
             ]
             ax_bottom.legend(
                 handles=handles,
-                loc="upper left",
-                bbox_to_anchor=(0.0, 1.22),
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.01),
                 ncol=4,
                 frameon=True,
-                fontsize=8,
+                fontsize=11,
                 columnspacing=0.8,
                 handlelength=1.8,
             )
 
-            style_time_axis(top_axes[-1], timestamps)
-            style_time_axis(ax_bottom, timestamps)
-            top_axes[-1].set_xlim(xmin, xmax)
-            ax_bottom.set_xlabel("时间")
-            top_axes[0].text(-0.06, 1.08, "(a)", transform=top_axes[0].transAxes, fontsize=12, fontweight="bold")
-            ax_bottom.text(-0.06, -0.18, "(b)", transform=ax_bottom.transAxes, fontsize=12, fontweight="bold")
+            major_locator = mdates.AutoDateLocator(minticks=6, maxticks=10)
+            major_formatter = mdates.DateFormatter("%Y%m%d")
+            ax_left.xaxis.set_major_locator(major_locator)
+            ax_left.xaxis.set_major_formatter(major_formatter)
+            ax_bottom.xaxis.set_major_locator(major_locator)
+            ax_bottom.xaxis.set_major_formatter(major_formatter)
+            fig.canvas.draw()
+            xticks = ax_left.get_xticks()
+            for xt in xticks:
+                ax_left.axvline(xt, color="black", lw=0.6, zorder=0)
+                ax_bottom.axvline(xt, color="black", lw=0.6, zorder=3)
+            ax_left.set_xlim(xmin, xmax)
+            ax_bottom.set_xlabel("时间", fontsize=13)
+            ax_left.set_xlabel("时间", fontsize=13)
+            ax_left.text(-0.08, 1.02, "(a)", transform=ax_left.transAxes, fontsize=15, fontweight="bold")
+            ax_bottom.text(-0.08, 1.02, "(b)", transform=ax_bottom.transAxes, fontsize=15, fontweight="bold")
 
             save_and_track(fig, "all_channels_status_overview.png")
 
