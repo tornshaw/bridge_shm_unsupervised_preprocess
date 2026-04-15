@@ -64,6 +64,8 @@ class BridgeApp(tk.Tk):
         self.current_image_path: Optional[str] = None
         self.node_checked: Dict[str, bool] = {}
         self.node_raw_text: Dict[str, str] = {}
+        self.image_zoom: float = 1.0
+        self.last_analysis_output_dir: Optional[str] = None
 
         self._build_ui()
 
@@ -197,6 +199,9 @@ class BridgeApp(tk.Tk):
         self.image_label.bind("<Configure>", lambda _e: self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all")))
         self.image_canvas.bind("<Configure>", lambda _e: self._render_current_image())
         self.bridge_tree.bind("<Button-1>", self._on_tree_click, add="+")
+        self.image_canvas.bind("<Control-MouseWheel>", self._on_image_zoom_wheel)
+        self._bind_mousewheel(self.bridge_tree, self.bridge_tree)
+        self._bind_mousewheel(self.image_canvas, self.image_canvas)
 
         bottom = ttk.LabelFrame(self, text="分析结果表格与日志")
         bottom.pack(fill=tk.BOTH, padx=10, pady=6)
@@ -224,6 +229,8 @@ class BridgeApp(tk.Tk):
         log_wrap.columnconfigure(0, weight=1)
         self.result_text.insert(tk.END, "等待分析...\n")
         self.result_text.configure(state=tk.DISABLED)
+        self._bind_mousewheel(self.summary_table, self.summary_table)
+        self._bind_mousewheel(self.result_text, self.result_text)
         self._on_mode_change()
 
     def _set_result(self, text: str) -> None:
@@ -231,6 +238,34 @@ class BridgeApp(tk.Tk):
         self.result_text.delete("1.0", tk.END)
         self.result_text.insert(tk.END, text)
         self.result_text.configure(state=tk.DISABLED)
+
+    def _bind_mousewheel(self, widget, target) -> None:
+        def _on_wheel(event):
+            delta = int(-1 * (event.delta / 120))
+            try:
+                target.yview_scroll(delta, "units")
+            except Exception:
+                pass
+            return "break"
+
+        def _on_shift_wheel(event):
+            delta = int(-1 * (event.delta / 120))
+            try:
+                target.xview_scroll(delta, "units")
+            except Exception:
+                pass
+            return "break"
+
+        widget.bind("<MouseWheel>", _on_wheel, add="+")
+        widget.bind("<Shift-MouseWheel>", _on_shift_wheel, add="+")
+
+    def _on_image_zoom_wheel(self, event) -> str:
+        if event.delta > 0:
+            self.image_zoom = min(3.0, self.image_zoom * 1.1)
+        else:
+            self.image_zoom = max(0.3, self.image_zoom / 1.1)
+        self._render_current_image()
+        return "break"
 
     def _show_summary_table(self, summary: pd.DataFrame) -> None:
         for c in self.summary_table["columns"]:
@@ -273,6 +308,10 @@ class BridgeApp(tk.Tk):
                 w = max(200, self.image_canvas.winfo_width() - 20)
                 h = max(160, self.image_canvas.winfo_height() - 20)
                 im.thumbnail((w, h))
+                if self.image_zoom != 1.0:
+                    zw = max(1, int(im.width * self.image_zoom))
+                    zh = max(1, int(im.height * self.image_zoom))
+                    im = im.resize((zw, zh))
                 self.result_photo = ImageTk.PhotoImage(im)
             else:
                 self.result_photo = tk.PhotoImage(file=path)
@@ -327,6 +366,15 @@ class BridgeApp(tk.Tk):
             except Exception as e:
                 messagebox.showerror("错误", f"打开图片失败: {e}")
 
+        def on_ctrl_wheel(event):
+            if event.delta > 0:
+                scale_var.set(min(3.0, float(scale_var.get()) * 1.1))
+            else:
+                scale_var.set(max(0.2, float(scale_var.get()) / 1.1))
+            return "break"
+
+        self._bind_mousewheel(canvas, canvas)
+        canvas.bind("<Control-MouseWheel>", on_ctrl_wheel, add="+")
         scale_var.trace_add("write", redraw)
         redraw()
 
@@ -623,14 +671,15 @@ class BridgeApp(tk.Tk):
         return idxs, picked_sensors
 
     def _clear_analysis_results(self) -> None:
-        output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
-        if os.path.exists(output_root):
-            shutil.rmtree(output_root, ignore_errors=True)
+        target = self.last_analysis_output_dir
+        if target and os.path.exists(target):
+            shutil.rmtree(target, ignore_errors=True)
         self._show_summary_table(pd.DataFrame())
         self.result_images = []
+        self.image_zoom = 1.0
         self._render_current_image()
         self._set_result("分析结果已清除。\n")
-        messagebox.showinfo("成功", f"已清理输出目录: {output_root}")
+        messagebox.showinfo("成功", f"已清理当次分析结果目录: {target or '无'}")
 
     def _run(self, analysis_mode: str) -> None:
         try:
@@ -651,7 +700,10 @@ class BridgeApp(tk.Tk):
         self.bridge_sensor_select.update(picked_sensors)
 
         output_root = self.output_dir_var.get().strip() or "outputs/gui_analysis"
-        os.makedirs(output_root, exist_ok=True)
+        run_tag = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+        session_output_root = os.path.join(output_root, f"run_{run_tag}")
+        os.makedirs(session_output_root, exist_ok=True)
+        self.image_zoom = 1.0
 
         try:
             from .app_service import build_offline_tasks, run_multi_bridge_tasks
@@ -671,7 +723,7 @@ class BridgeApp(tk.Tk):
                 tasks = []
                 for i in selected_idx:
                     bridge = self.bridge_items[i]["bridge_name"]
-                    csv_out = os.path.join(output_root, f"{bridge}_online.csv")
+                    csv_out = os.path.join(session_output_root, f"{bridge}_online.csv")
                     fetch_bridge_data_online(
                         bridge_name=bridge,
                         start_time=start.strftime("%Y-%m-%d %H:%M:%S"),
@@ -685,7 +737,7 @@ class BridgeApp(tk.Tk):
 
             summary = run_multi_bridge_tasks(
                 tasks=tasks,
-                output_root=output_root,
+                output_root=session_output_root,
                 analysis_mode=analysis_mode,
                 start_time=start,
                 end_time=end,
@@ -698,15 +750,16 @@ class BridgeApp(tk.Tk):
                 f"分析完成时间: {now_str}\n"
                 f"分析方法: {analysis_mode}\n"
                 f"桥梁数: {len(summary)}\n"
-                f"输出目录: {output_root}\n\n"
+                f"输出目录: {session_output_root}\n\n"
             )
             if show_cols:
                 result += summary[show_cols].to_string(index=False)
             self._set_result(result)
             self._show_summary_table(summary)
             first_bridge = summary.iloc[0]["bridge_name"] if not summary.empty and "bridge_name" in summary.columns else None
-            self._load_result_images(output_root=output_root, bridge_name=first_bridge)
-            messagebox.showinfo("完成", f"分析完成。桥梁数={len(summary)}\n输出目录: {output_root}")
+            self._load_result_images(output_root=session_output_root, bridge_name=first_bridge)
+            self.last_analysis_output_dir = session_output_root
+            messagebox.showinfo("完成", f"分析完成。桥梁数={len(summary)}\n输出目录: {session_output_root}")
         except Exception as e:
             messagebox.showerror("分析失败", str(e))
 
