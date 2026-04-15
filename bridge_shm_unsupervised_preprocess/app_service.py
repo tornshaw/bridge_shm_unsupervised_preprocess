@@ -8,6 +8,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+plt.rcParams["font.family"] = "sans-serif"
+plt.rcParams["font.sans-serif"] = ["STSong", "Microsoft YaHei", "SimHei", "FangSong", "DejaVu Sans"]
+plt.rcParams["axes.unicode_minus"] = False
+
 
 @dataclass
 class BridgeAnalysisTask:
@@ -200,9 +204,10 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
                 continue
             ax.plot(t_raw.iloc[:n], raw_series.iloc[:n], lw=0.8, alpha=0.5, label="Raw")
             ax.plot(t_clean.iloc[:n], clean_series.iloc[:n], lw=1.1, label="Cleaned")
-            ax.set_title(f"{s}: 原始 vs 修复")
+            ax.set_title(f"{s}: 原始 vs 修复", fontsize=14)
+            ax.tick_params(labelsize=12)
             ax.grid(alpha=0.25)
-        axes[0].legend(loc="upper right")
+        axes[0].legend(loc="upper right", fontsize=11)
         fig.tight_layout()
         fig.savefig(os.path.join(output_dir, "raw_vs_cleaned_top_sensors.png"), dpi=160)
         plt.close(fig)
@@ -212,8 +217,9 @@ def _save_basic_visualizations(df: pd.DataFrame, outputs: Dict[str, pd.DataFrame
     worst = health.head(min(12, len(health)))
     ax.barh(worst["sensor_name"], worst["project_score"])
     ax.invert_yaxis()
-    ax.set_title("风险最高传感器")
-    ax.set_xlabel("project_score")
+    ax.set_title("风险最高传感器", fontsize=14)
+    ax.set_xlabel("project_score", fontsize=12)
+    ax.tick_params(labelsize=12)
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
     fig.savefig(os.path.join(output_dir, "sensor_health_barh.png"), dpi=160)

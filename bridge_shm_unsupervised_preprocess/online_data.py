@@ -61,6 +61,22 @@ def load_bridge_sensors_from_mapping(mapping_file: str) -> Dict[str, List[str]]:
     return out
 
 
+def load_point_name_mapping(mapping_file: str) -> Dict[str, str]:
+    """读取 POINT_CODE -> POINT_NAME 映射."""
+    df = pd.read_excel(mapping_file)
+    code_col = next((c for c in ["POINT_CODE", "point_code", "测点编号"] if c in df.columns), None)
+    name_col = next((c for c in ["POINT_NAME", "point_name", "测点名称"] if c in df.columns), None)
+    if code_col is None or name_col is None:
+        return {}
+    out: Dict[str, str] = {}
+    for _, row in df[[code_col, name_col]].dropna().iterrows():
+        code = str(row[code_col]).strip()
+        name = str(row[name_col]).strip()
+        if code and name:
+            out[code] = name
+    return out
+
+
 def test_doris_connection(host: str, port: int, user: str, password: str, database: str) -> tuple[bool, str]:
     """测试 Doris 数据库连接状态."""
     try:

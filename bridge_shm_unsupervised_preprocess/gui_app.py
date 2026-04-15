@@ -20,10 +20,20 @@ from .online_data import (
     find_mapping_file,
     load_bridge_names_from_mapping,
     load_bridge_sensors_from_mapping,
+    load_point_name_mapping,
     test_doris_connection,
 )
 
 APP_NAME = "桥梁健康监测系统传感器健康状态无监督可视化分析软件"
+INDICATOR_MAP = {
+    "WSD": "温湿度",
+    "YB": "主梁应变",
+    "QJ": "桥墩倾角",
+    "LX": "梁墩相对位移",
+    "BB": "主梁挠度",
+    "ZL": "主梁竖向振动",
+    "QD": "桥墩三向振动",
+}
 
 
 class BridgeApp(tk.Tk):
@@ -52,6 +62,7 @@ class BridgeApp(tk.Tk):
         self.offline_csvs: List[str] = []
         self.online_bridge_names: List[str] = []
         self.online_bridge_sensors: Dict[str, List[str]] = {}
+        self.point_name_map: Dict[str, str] = {}
         self.bridge_sensor_select: Dict[str, List[str]] = {}
         self.bridge_sensors_all: Dict[str, List[str]] = {}
         self.bridge_items: List[Dict[str, str]] = []
@@ -64,6 +75,7 @@ class BridgeApp(tk.Tk):
         self.current_image_path: Optional[str] = None
         self.node_checked: Dict[str, bool] = {}
         self.node_raw_text: Dict[str, str] = {}
+        self.node_sensor_id: Dict[str, str] = {}
         self.image_zoom: float = 1.0
         self.last_analysis_output_dir: Optional[str] = None
         self.history_table_df = pd.DataFrame()
@@ -450,6 +462,7 @@ class BridgeApp(tk.Tk):
         try:
             self.online_bridge_names = load_bridge_names_from_mapping(mapping)
             self.online_bridge_sensors = load_bridge_sensors_from_mapping(mapping)
+            self.point_name_map = load_point_name_mapping(mapping)
             self._refresh_bridge_list()
             messagebox.showinfo("成功", f"已加载在线桥梁数量: {len(self.online_bridge_names)}")
         except Exception as e:
@@ -548,6 +561,23 @@ class BridgeApp(tk.Tk):
         df = pd.read_csv(path, nrows=5)
         return list(df.columns[1:])
 
+    @staticmethod
+    def _parse_sensor_base(sensor_name: str) -> tuple[str, str]:
+        base = sensor_name.split("_", 1)[0]
+        suffix = sensor_name.split("_", 1)[1] if "_" in sensor_name else ""
+        base5 = "-".join(base.split("-")[:5]) if "-" in base else base
+        return base5, suffix
+
+    def _sensor_indicator_code(self, sensor_name: str) -> str:
+        base5, _ = self._parse_sensor_base(sensor_name)
+        parts = base5.split("-")
+        return parts[3] if len(parts) >= 4 else "OTHER"
+
+    def _sensor_display_name(self, sensor_name: str) -> str:
+        base5, suffix = self._parse_sensor_base(sensor_name)
+        point_cn = self.point_name_map.get(base5, base5)
+        return f"{point_cn}_{suffix}" if suffix else point_cn
+
     def _refresh_bridge_tree_from_items(self) -> None:
         for item in self.bridge_tree.get_children():
             self.bridge_tree.delete(item)
@@ -555,6 +585,7 @@ class BridgeApp(tk.Tk):
         self.tree_to_bridge = {}
         self.node_checked = {}
         self.node_raw_text = {}
+        self.node_sensor_id = {}
         for info in self.bridge_items:
             item_id = self.bridge_tree.insert("", tk.END, text=f"☐ {info['bridge_name']}", open=True)
             self.tree_to_bridge[item_id] = info["bridge_name"]
@@ -583,10 +614,21 @@ class BridgeApp(tk.Tk):
             if sensors is None:
                 sensors = self._load_sensors_for_bridge(bridge)
                 self.bridge_sensors_all[bridge] = sensors
+            group: Dict[str, List[str]] = {}
             for s in sensors:
-                ch = self.bridge_tree.insert(node_id, tk.END, text=f"☐ {s}")
-                self.node_raw_text[ch] = s
-                self.node_checked[ch] = False
+                code = self._sensor_indicator_code(s)
+                group.setdefault(code, []).append(s)
+            for code, sensor_list in sorted(group.items(), key=lambda x: x[0]):
+                ind_name = INDICATOR_MAP.get(code, code)
+                ind_node = self.bridge_tree.insert(node_id, tk.END, text=f"☐ {ind_name}({code})", open=True)
+                self.node_raw_text[ind_node] = f"{ind_name}({code})"
+                self.node_checked[ind_node] = False
+                for s in sensor_list:
+                    display = self._sensor_display_name(s)
+                    leaf = self.bridge_tree.insert(ind_node, tk.END, text=f"☐ {display}")
+                    self.node_raw_text[leaf] = display
+                    self.node_sensor_id[leaf] = s
+                    self.node_checked[leaf] = False
 
     def _set_node_checked(self, node: str, checked: bool) -> None:
         self.node_checked[node] = checked
@@ -600,14 +642,21 @@ class BridgeApp(tk.Tk):
             return
         checked = not self.node_checked.get(node, False)
         self._set_node_checked(node, checked)
+        # 下行联动：父节点勾选影响全部子孙节点
+        def set_descendants(nid: str, val: bool) -> None:
+            for ch in self.bridge_tree.get_children(nid):
+                self._set_node_checked(ch, val)
+                set_descendants(ch, val)
+
+        set_descendants(node, checked)
+
+        # 上行联动：子节点变化反推父节点状态
         parent = self.bridge_tree.parent(node)
-        if parent == "":
-            for ch in self.bridge_tree.get_children(node):
-                self._set_node_checked(ch, checked)
-        else:
+        while parent:
             siblings = self.bridge_tree.get_children(parent)
-            all_checked = all(self.node_checked.get(ch, False) for ch in siblings)
+            all_checked = all(self.node_checked.get(ch, False) for ch in siblings) if siblings else False
             self._set_node_checked(parent, all_checked)
+            parent = self.bridge_tree.parent(parent)
         self.bridge_tree.selection_set(node)
         self._update_selected_info()
 
@@ -619,8 +668,11 @@ class BridgeApp(tk.Tk):
             if not self.node_checked.get(node, False):
                 continue
             total_bridges += 1
-            chs = self.bridge_tree.get_children(node)
-            n = sum(1 for ch in chs if self.node_checked.get(ch, False))
+            n = 0
+            for ind in self.bridge_tree.get_children(node):
+                for leaf in self.bridge_tree.get_children(ind):
+                    if self.node_checked.get(leaf, False):
+                        n += 1
             total_sensors += n
             lines.append(f"{bridge}: {n} 个设备")
         if not lines:
@@ -633,7 +685,9 @@ class BridgeApp(tk.Tk):
         sel_nodes = self.bridge_tree.selection()
         roots = []
         for node in sel_nodes:
-            root = node if self.bridge_tree.parent(node) == "" else self.bridge_tree.parent(node)
+            root = node
+            while self.bridge_tree.parent(root) != "":
+                root = self.bridge_tree.parent(root)
             if root not in roots:
                 roots.append(root)
         if not roots:
@@ -679,12 +733,13 @@ class BridgeApp(tk.Tk):
             if not self.node_checked.get(root, False):
                 continue
             roots[root] = bridge
-            for ch in self.bridge_tree.get_children(root):
-                if self.node_checked.get(ch, False):
-                    sensor_name = self.node_raw_text.get(ch, "").strip()
-                    picked_sensors.setdefault(bridge, [])
-                    if sensor_name and sensor_name not in picked_sensors[bridge]:
-                        picked_sensors[bridge].append(sensor_name)
+            for ind in self.bridge_tree.get_children(root):
+                for leaf in self.bridge_tree.get_children(ind):
+                    if self.node_checked.get(leaf, False):
+                        sensor_name = self.node_sensor_id.get(leaf, "").strip()
+                        picked_sensors.setdefault(bridge, [])
+                        if sensor_name and sensor_name not in picked_sensors[bridge]:
+                            picked_sensors[bridge].append(sensor_name)
 
         idxs: List[int] = []
         for bridge in roots.values():
