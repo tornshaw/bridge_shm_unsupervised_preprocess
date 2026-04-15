@@ -2,10 +2,29 @@ from __future__ import annotations
 
 import glob
 import os
+import socket
 import subprocess
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import pandas as pd
+
+
+def _pick_bridge_col(df: pd.DataFrame) -> str:
+    for col in ["bridge_name", "桥梁名称", "bridge", "桥名", "object_name", "OBJECT_NAME", "结构物名称"]:
+        if col in df.columns:
+            return col
+    # 兜底：优先选择值中“桥”占比高的列（避免选到 object_id）
+    best_col = df.columns[0]
+    best_ratio = -1.0
+    for c in df.columns:
+        vals = [str(x).strip() for x in df[c].dropna().tolist() if str(x).strip()]
+        if not vals:
+            continue
+        ratio = sum("桥" in v for v in vals) / len(vals)
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_col = c
+    return best_col
 
 
 def find_mapping_file(mapping_dir: str = "mapping") -> Optional[str]:
@@ -15,11 +34,84 @@ def find_mapping_file(mapping_dir: str = "mapping") -> Optional[str]:
 
 def load_bridge_names_from_mapping(mapping_file: str) -> List[str]:
     df = pd.read_excel(mapping_file)
-    for col in ["bridge_name", "桥梁名称", "bridge", "桥名"]:
-        if col in df.columns:
-            return sorted({str(x).strip() for x in df[col].dropna().tolist() if str(x).strip()})
-    first = df.columns[0]
-    return sorted({str(x).strip() for x in df[first].dropna().tolist() if str(x).strip()})
+    bridge_col = _pick_bridge_col(df)
+    return sorted({str(x).strip() for x in df[bridge_col].dropna().tolist() if str(x).strip()})
+
+
+def load_bridge_sensors_from_mapping(mapping_file: str) -> Dict[str, List[str]]:
+    """读取 mapping 表中的桥梁-测点映射，返回 {bridge_name: [sensor, ...]}."""
+    df = pd.read_excel(mapping_file)
+    bridge_col = _pick_bridge_col(df)
+    sensor_col = next(
+        (c for c in ["point_code", "测点编号", "sensor_name", "point_name", "测点名称"] if c in df.columns),
+        None,
+    )
+    if sensor_col is None:
+        return {}
+
+    out: Dict[str, List[str]] = {}
+    for _, row in df[[bridge_col, sensor_col]].dropna().iterrows():
+        b = str(row[bridge_col]).strip()
+        s = str(row[sensor_col]).strip()
+        if not b or not s:
+            continue
+        out.setdefault(b, [])
+        if s not in out[b]:
+            out[b].append(s)
+    return out
+
+
+def load_point_name_mapping(mapping_file: str) -> Dict[str, str]:
+    """读取 POINT_CODE -> POINT_NAME 映射."""
+    df = pd.read_excel(mapping_file)
+    code_col = next((c for c in ["POINT_CODE", "point_code", "测点编号"] if c in df.columns), None)
+    name_col = next((c for c in ["POINT_NAME", "point_name", "测点名称"] if c in df.columns), None)
+    if code_col is None or name_col is None:
+        return {}
+    out: Dict[str, str] = {}
+    for _, row in df[[code_col, name_col]].dropna().iterrows():
+        code = str(row[code_col]).strip()
+        name = str(row[name_col]).strip()
+        if code and name:
+            out[code] = name
+    return out
+
+
+def test_doris_connection(host: str, port: int, user: str, password: str, database: str) -> tuple[bool, str]:
+    """测试 Doris 数据库连接状态."""
+    try:
+        import pymysql  # type: ignore
+    except Exception as e:
+        # 无驱动时，至少做一次端口联通性测试，避免 GUI 完全不可用
+        try:
+            with socket.create_connection((host, int(port)), timeout=5):
+                return True, f"端口可达({host}:{port})，但缺少 pymysql 依赖: {e}"
+        except Exception:
+            return False, f"缺少 pymysql 依赖且端口不可达: {e}"
+
+    conn = None
+    try:
+        conn = pymysql.connect(
+            host=host,
+            port=int(port),
+            user=user,
+            password=password,
+            database=database,
+            connect_timeout=5,
+            charset="utf8mb4",
+        )
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return True, "数据库连接成功"
+    except Exception as e:
+        return False, f"数据库连接失败: {e}"
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def fetch_bridge_data_with_export_script(
