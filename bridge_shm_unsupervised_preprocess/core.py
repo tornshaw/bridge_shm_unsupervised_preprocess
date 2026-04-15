@@ -1120,9 +1120,9 @@ class BridgeSHMUnsupervisedPreprocessor:
         all_sensors = self.artifacts.sensor_names
         n_all = len(all_sensors)
         if n_all > 0:
-            fig_h = max(10.0, 0.55 * n_all + 5.0)
+            fig_h = max(8.0, 0.34 * n_all + 3.8)
             fig, (ax_left, ax_bottom) = plt.subplots(
-                1, 2, figsize=(44, fig_h), gridspec_kw={"width_ratios": [1.0, 1.0]}
+                1, 2, figsize=(32, fig_h), gridspec_kw={"width_ratios": [1.0, 1.0], "wspace": 0.16}
             )
             time_num = mdates.date2num(pd.to_datetime(timestamps))
             if np.any(np.isfinite(time_num)):
@@ -1144,8 +1144,13 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_left.set_yticklabels(all_sensors, fontsize=11)
             ax_left.set_ylabel("传感器", fontsize=13)
             ax_left.set_title("全通道原始时程", fontsize=16)
-            ax_left.grid(True, axis="x", alpha=0.22, linestyle="--")
+            for y in np.arange(0.5, n_all + 1.5, 1.0):
+                ax_left.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=0)
             ax_left.set_ylim(0.5, n_all + 0.5)
+            ax_left.set_facecolor("white")
+            for sp in ax_left.spines.values():
+                sp.set_linewidth(0.9)
+                sp.set_color("black")
 
             # (b) 右图：离散异常状态矩阵（底图高度视觉增强）
             label_matrix = label_df[all_sensors].astype(str).to_numpy(dtype=object).T
@@ -1206,9 +1211,12 @@ class BridgeSHMUnsupervisedPreprocessor:
             ax_bottom.set_yticklabels(all_sensors, fontsize=11)
             ax_bottom.set_ylabel("传感器", fontsize=13)
             ax_bottom.set_title("异常状态矩阵 Sensor Status", fontsize=16, pad=42)
-            ax_bottom.grid(True, axis="x", alpha=0.22, linestyle="--")
+            for y in np.arange(0.5, n_all + 1.5, 1.0):
+                ax_bottom.hlines(y, xmin, xmax, colors="black", linestyles="-", linewidth=0.6, zorder=3)
+            ax_bottom.set_facecolor("white")
             for sp in ax_bottom.spines.values():
-                sp.set_linewidth(1.0)
+                sp.set_linewidth(0.9)
+                sp.set_color("black")
 
             handles = [
                 plt.Line2D([0], [0], color=status_colors[s], lw=7, label=f"{status_zh[s]}({s})")
@@ -1225,8 +1233,17 @@ class BridgeSHMUnsupervisedPreprocessor:
                 handlelength=1.8,
             )
 
-            style_time_axis(ax_left, timestamps)
-            style_time_axis(ax_bottom, timestamps)
+            major_locator = mdates.AutoDateLocator(minticks=6, maxticks=10)
+            major_formatter = mdates.DateFormatter("%Y%m%d")
+            ax_left.xaxis.set_major_locator(major_locator)
+            ax_left.xaxis.set_major_formatter(major_formatter)
+            ax_bottom.xaxis.set_major_locator(major_locator)
+            ax_bottom.xaxis.set_major_formatter(major_formatter)
+            fig.canvas.draw()
+            xticks = ax_left.get_xticks()
+            for xt in xticks:
+                ax_left.axvline(xt, color="black", lw=0.6, zorder=0)
+                ax_bottom.axvline(xt, color="black", lw=0.6, zorder=3)
             ax_left.set_xlim(xmin, xmax)
             ax_bottom.set_xlabel("时间", fontsize=13)
             ax_left.set_xlabel("时间", fontsize=13)
